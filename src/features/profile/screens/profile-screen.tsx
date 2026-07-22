@@ -299,6 +299,39 @@ export function ProfileScreen() {
         </Card>
       </Animated.View>
 
+      {/* Profile Section */}
+      <Animated.View entering={FadeInDown.delay(75).duration(350)}>
+        <View style={styles.sectionHeader}>
+          <Text style={[styles.sectionTitle, { color: theme.textSecondary }]} weight="semibold">
+            Profil
+          </Text>
+        </View>
+        <Card variant="default" style={styles.settingsCard}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            style={styles.settingRow}
+            onPress={() => router.push('/edit-profile')}
+          >
+            <View style={styles.settingLeft}>
+              <View style={[styles.iconContainer, { backgroundColor: theme.surfaceElement }]}>
+                <User color={theme.textPrimary} size={20} variant="Outline" />
+              </View>
+              <View>
+                <Text style={[styles.settingLabel, { color: theme.textPrimary }]} weight="medium">
+                  Ubah Profil
+                </Text>
+                <Text style={[styles.settingSub, { color: theme.textMuted }]}>
+                  Ubah nama lengkap Anda yang terdaftar
+                </Text>
+              </View>
+            </View>
+            <Text style={[styles.actionLink, { color: theme.primary }]} weight="semibold">
+              Edit
+            </Text>
+          </TouchableOpacity>
+        </Card>
+      </Animated.View>
+
       {/* Security Section */}
       <Animated.View entering={FadeInDown.delay(100).duration(350)}>
         <View style={styles.sectionHeader}>

@@ -9,46 +9,18 @@ import { SavingsBalanceSection } from '@/features/dashboard/components/savings-b
 import { AiInputBar } from '@/features/dashboard/components/ai-input-bar';
 import { HomeCompactPanel } from '@/features/dashboard/components/home-compact-panel';
 import { getTheme } from '@/core/theme/colors';
-import { ManageScreen, type ManageSection } from '@/features/manage/screens/manage-screen';
-import { BudgetScreen } from '@/features/budget/screens/budget-screen';
-import { DebtsScreen } from '@/features/debts/screens/debts-screen';
-import { WalletsScreen } from '@/features/wallets/screens/wallets-screen';
+import { ManageScreen } from '@/features/manage/screens/manage-screen';
 import { AnalyticsScreen } from '@/features/analytics/screens/analytics-screen';
-import { SavingsScreen } from '@/features/savings/screens/savings-screen';
-import { CategoriesScreen } from '@/features/categories/screens/categories-screen';
 import { ProfileScreen } from '@/features/profile/screens/profile-screen';
-
-type OpenManageSection = ManageSection | 'hub';
+import { router } from 'expo-router';
 
 export default function MainPage() {
   const colorScheme = useColorScheme();
   const theme = getTheme(colorScheme);
   const [activeTab, setActiveTab] = useState<NavTab>('home');
-  const [manageSection, setManageSection] = useState<OpenManageSection>('hub');
 
   const openTab = (tab: NavTab) => {
     setActiveTab(tab);
-    if (tab === 'manage') setManageSection('hub');
-  };
-
-  const renderManageContent = () => {
-    if (manageSection === 'hub') {
-      return <ManageScreen onOpen={setManageSection} />;
-    }
-
-    const onBack = () => setManageSection('hub');
-    switch (manageSection) {
-      case 'accounts':
-        return <WalletsScreen />;
-      case 'budget':
-        return <BudgetScreen />;
-      case 'savings':
-        return <SavingsScreen onBack={onBack} />;
-      case 'debts':
-        return <DebtsScreen />;
-      case 'categories':
-        return <CategoriesScreen onBack={onBack} />;
-    }
   };
 
   const renderContent = () => {
@@ -63,7 +35,7 @@ export default function MainPage() {
           </ScrollView>
         );
       case 'manage':
-        return renderManageContent();
+        return <ManageScreen />;
       case 'analytics':
         return <AnalyticsScreen />;
       case 'profile':
@@ -75,7 +47,11 @@ export default function MainPage() {
     <ScreenWrapper withSafeArea style={{ backgroundColor: theme.surfaceHighlight }}>
       <View style={styles.container}>
         {renderContent()}
-        <FloatingGlassNav activeTab={activeTab} onTabChange={openTab} />
+        <FloatingGlassNav
+          activeTab={activeTab}
+          onTabChange={openTab}
+          onScanPress={() => router.push('/scan')}
+        />
       </View>
     </ScreenWrapper>
   );

@@ -344,18 +344,20 @@ class FinanceStore {
   createDebt(input: {
     name: string;
     totalAmount: number;
+    paidAmount?: number;
     creditor?: string;
     dueDate?: string;
     notes?: string;
   }): Debt {
+    const paidAmount = Math.max(0, Math.min(input.paidAmount ?? 0, input.totalAmount));
     const debt: Debt = {
       id: `debt-${Date.now()}`,
       name: input.name,
       creditor: input.creditor,
       totalAmount: input.totalAmount,
-      paidAmount: 0,
+      paidAmount,
       dueDate: input.dueDate,
-      status: 'active',
+      status: paidAmount >= input.totalAmount ? 'paid' : 'active',
       notes: input.notes,
     };
     this.debts.push(debt);
