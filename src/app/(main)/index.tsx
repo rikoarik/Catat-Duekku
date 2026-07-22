@@ -16,6 +16,7 @@ import { WalletsScreen } from '@/features/wallets/screens/wallets-screen';
 import { AnalyticsScreen } from '@/features/analytics/screens/analytics-screen';
 import { SavingsScreen } from '@/features/savings/screens/savings-screen';
 import { CategoriesScreen } from '@/features/categories/screens/categories-screen';
+import { ProfileScreen } from '@/features/profile/screens/profile-screen';
 
 type OpenManageSection = ManageSection | 'hub';
 
@@ -66,12 +67,7 @@ export default function MainPage() {
       case 'analytics':
         return <AnalyticsScreen />;
       case 'profile':
-        return (
-          <View style={styles.placeholderCenter}>
-            <Text style={[styles.placeholderTitle, { color: theme.textPrimary }]}>Profil</Text>
-            <Text style={[styles.placeholderSub, { color: theme.textMuted }]}>Pengaturan akun akan tersedia di sini.</Text>
-          </View>
-        );
+        return <ProfileScreen />;
     }
   };
 

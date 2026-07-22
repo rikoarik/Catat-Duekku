@@ -37,22 +37,34 @@ const CONTENT_PAD = 20;
 const CHART_WIDTH = SCREEN_WIDTH - CONTENT_PAD * 2 - 32; // card padding 16 each side
 const CHART_HEIGHT = 150;
 
-// ─── Mock Data ────────────────────────────────────────────────────────────────
-const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul'];
+// ─── Real Data Helpers ────────────────────────────────────────────────────────
+const MONTH_NAMES = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+const WEEKDAY_NAMES = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+const CATEGORY_COLORS = ['#D65B5B', '#23835B', '#B87912', '#3B82F6', '#8B5CF6', '#F97316'];
 
-const INCOME_DATA = [5000000, 6200000, 5800000, 7000000, 6500000, 7800000, 8000000];
-const EXPENSE_DATA = [3200000, 4100000, 3800000, 4800000, 4200000, 5300000, 4690000];
+type CategorySlice = { label: string; amount: number; pct: number; color: string };
+type StatItem = { label: string; value: string; sub: string; color: string };
 
-const CATEGORIES = [
-  { label: 'Makan & Harian', amount: 1200000, pct: 26, color: '#FF6B35' },
-  { label: 'Kos / Sewa',    amount: 900000,  pct: 19, color: '#A3E635' },
-  { label: 'Transport',     amount: 650000,  pct: 14, color: '#38BDF8' },
-  { label: 'Belanja',       amount: 780000,  pct: 17, color: '#FACC15' },
-  { label: 'Hiburan',       amount: 520000,  pct: 11, color: '#FB923C' },
-  { label: 'Lain-lain',     amount: 640000,  pct: 13, color: '#C084FC' },
-];
+const monthKey = (date: Date) => `${date.getFullYear()}-${date.getMonth()}`;
 
-const NET_SAVINGS = INCOME_DATA.map((inc, i) => inc - EXPENSE_DATA[i]);
+function buildMonthBuckets(anchor = new Date()) {
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(anchor.getFullYear(), anchor.getMonth() - 6 + index, 1);
+    return {
+      key: monthKey(date),
+      label: MONTHS_SHORT[date.getMonth()],
+      income: 0,
+      expense: 0,
+    };
+  });
+}
+
+function getDeltaLabel(current: number, previous: number) {
+  if (previous === 0) return current === 0 ? '0%' : 'Baru';
+  const delta = ((current - previous) / previous) * 100;
+  return `${delta >= 0 ? '+' : ''}${delta.toFixed(1).replace('.', ',')}%`;
+}
 
 // ─── SVG Arc Helpers ──────────────────────────────────────────────────────────
 const DONUT_SIZE = 160;
@@ -261,35 +273,192 @@ export function AnalyticsScreen() {
   const isDark = colorScheme === 'dark';
 
   const [activeTab, setActiveTab] = useState<'arus-kas' | 'tabungan' | 'kategori'>('kategori');
+  const [version, setVersion] = useState(0);
 
-  const totalIncome = INCOME_DATA[INCOME_DATA.length - 1];
-  const totalExpense = EXPENSE_DATA[EXPENSE_DATA.length - 1];
-  const netSavings = totalIncome - totalExpense;
-  
-  // Mock budget data
-  const budgetLimit = 5000000;
-  const budgetUsed = totalExpense;
-  const budgetPct = Math.min(Math.round((budgetUsed / budgetLimit) * 100), 100);
-  const isBudgetSet = true; // change to false to show "Atur Budget" CTA
+  useEffect(() => {
+    const unsubscribe = financeStore.subscribe(() => setVersion((value) => value + 1));
+    return unsubscribe;
+  }, []);
 
-  const incomePath = buildSmoothPath(INCOME_DATA, CHART_WIDTH, CHART_HEIGHT);
-  const expensePath = buildSmoothPath(EXPENSE_DATA, CHART_WIDTH, CHART_HEIGHT);
-  const incomeArea = buildSmoothAreaPath(INCOME_DATA, CHART_WIDTH, CHART_HEIGHT);
-  const expenseArea = buildSmoothAreaPath(EXPENSE_DATA, CHART_WIDTH, CHART_HEIGHT);
-  
-  const incomePoints = getDataPoints(INCOME_DATA, CHART_WIDTH, CHART_HEIGHT);
-  const expensePoints = getDataPoints(EXPENSE_DATA, CHART_WIDTH, CHART_HEIGHT);
+  const transactions = useMemo(() => financeStore.getTransactions(), [version]);
 
-  // Donut arc segments
+  const today = useMemo(() => new Date(), []);
+  const currentMonth = today.getMonth();
+  const currentYear = today.getFullYear();
+  const currentMonthKey = `${currentYear}-${currentMonth}`;
+
+  const monthBuckets = useMemo(() => {
+    const buckets = buildMonthBuckets(today);
+    transactions.forEach((tx) => {
+      const date = new Date(tx.occurredAt);
+      if (Number.isNaN(date.getTime())) return;
+      if (date.getFullYear() !== currentYear) return;
+      const key = monthKey(date);
+      const bucket = buckets.find((b) => b.key === key);
+      if (!bucket) return;
+      const amount = Math.abs(tx.amount);
+      if (tx.type === 'EXPENSE') bucket.expense += amount;
+      else if (tx.type === 'INCOME') bucket.income += amount;
+    });
+    return buckets;
+  }, [transactions, currentMonth, currentYear]);
+
+  const currentBucket = monthBuckets[monthBuckets.length - 1];
+  const previousBucket = monthBuckets[monthBuckets.length - 2];
+
+  const incomeSeries = monthBuckets.map((b) => b.income);
+  const expenseSeries = monthBuckets.map((b) => b.expense);
+  const netSavingsSeries = monthBuckets.map((b) => b.income - b.expense);
+
+  const incomeDeltaLabel = getDeltaLabel(currentBucket.income, previousBucket.income);
+  const expenseDeltaLabel = getDeltaLabel(currentBucket.expense, previousBucket.expense);
+  const netSavings = currentBucket.income - currentBucket.expense;
+  const monthLabel = `${MONTH_NAMES[currentMonth]} ${currentYear}`;
+
+  const categorySlices = useMemo<CategorySlice[]>(() => {
+    const totals = new Map<string, number>();
+    transactions.forEach((tx) => {
+      if (tx.type !== 'EXPENSE') return;
+      const date = new Date(tx.occurredAt);
+      if (Number.isNaN(date.getTime())) return;
+      if (date.getMonth() !== currentMonth || date.getFullYear() !== currentYear) return;
+      const label = tx.categoryName || 'Lain-lain';
+      totals.set(label, (totals.get(label) ?? 0) + Math.abs(tx.amount));
+    });
+    const totalExpenseThisMonth = Array.from(totals.values()).reduce((sum, v) => sum + v, 0);
+    const sorted = Array.from(totals.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6);
+    return sorted.map(([label, amount], index) => ({
+      label,
+      amount,
+      pct: totalExpenseThisMonth === 0 ? 0 : Math.round((amount / totalExpenseThisMonth) * 100),
+      color: CATEGORY_COLORS[index % CATEGORY_COLORS.length],
+    }));
+  }, [transactions, currentMonth, currentYear]);
+
+  const hasTransactions = transactions.length > 0;
+
+  const incomePath = buildSmoothPath(incomeSeries, CHART_WIDTH, CHART_HEIGHT);
+  const expensePath = buildSmoothPath(expenseSeries, CHART_WIDTH, CHART_HEIGHT);
+  const incomeArea = buildSmoothAreaPath(incomeSeries, CHART_WIDTH, CHART_HEIGHT);
+  const expenseArea = buildSmoothAreaPath(expenseSeries, CHART_WIDTH, CHART_HEIGHT);
+
+  const incomePoints = getDataPoints(incomeSeries, CHART_WIDTH, CHART_HEIGHT);
+  const expensePoints = getDataPoints(expenseSeries, CHART_WIDTH, CHART_HEIGHT);
+
   const GAP_DEG = 3;
-  const totalPct = CATEGORIES.reduce((s, c) => s + c.pct, 0);
-  let cumAngle = 0;
-  const arcs = CATEGORIES.map((cat) => {
-    const sweep = (cat.pct / totalPct) * 360 - GAP_DEG;
-    const start = cumAngle;
-    cumAngle += (cat.pct / totalPct) * 360;
-    return { ...cat, startAngle: start, endAngle: start + sweep };
-  });
+  const arcs = (() => {
+    const total = categorySlices.reduce((sum, c) => sum + c.pct, 0) || 1;
+    let cumAngle = 0;
+    return categorySlices.map((cat) => {
+      const sweep = (cat.pct / total) * 360 - GAP_DEG;
+      const start = cumAngle;
+      cumAngle += (cat.pct / total) * 360;
+      return { ...cat, startAngle: start, endAngle: start + sweep };
+    });
+  })();
+
+  const quickStats = useMemo<StatItem[]>(() => {
+    if (!hasTransactions) return [];
+    const expenseTxs = transactions.filter((tx) => tx.type === 'EXPENSE' && tx.occurredAt.startsWith(currentMonthKey));
+    const totalsByWeekday = new Map<number, number>();
+    const totalsByWeek = new Map<number, number>();
+    let topCategory = { label: '-', amount: 0 };
+    expenseTxs.forEach((tx) => {
+      const date = new Date(tx.occurredAt);
+      if (Number.isNaN(date.getTime())) return;
+      const amount = Math.abs(tx.amount);
+      totalsByWeekday.set(date.getDay(), (totalsByWeekday.get(date.getDay()) ?? 0) + amount);
+      const week = Math.ceil(date.getDate() / 7);
+      totalsByWeek.set(week, (totalsByWeek.get(week) ?? 0) + amount);
+      const label = tx.categoryName || 'Lain-lain';
+      if (amount > topCategory.amount) topCategory = { label, amount };
+    });
+
+    const busiest = Array.from(totalsByWeekday.entries()).sort((a, b) => b[1] - a[1])[0];
+    const quietest = Array.from(totalsByWeek.entries()).sort((a, b) => a[1] - b[1])[0];
+
+    const totalExpenseThisMonth = expenseTxs.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
+    const topCategoryPct = topCategory.amount > 0 ? Math.round((topCategory.amount / totalExpenseThisMonth) * 100) : 0;
+
+    const stats: StatItem[] = [];
+    if (busiest) {
+      stats.push({
+        label: 'Hari Tersibuk',
+        value: WEEKDAY_NAMES[busiest[0]],
+        sub: formatCurrency(busiest[1]),
+        color: '#D65B5B',
+      });
+    }
+    if (topCategory.amount > 0) {
+      stats.push({
+        label: 'Kategori Terbesar',
+        value: topCategory.label,
+        sub: `${topCategoryPct}% dari pengeluaran`,
+        color: CATEGORY_COLORS[0],
+      });
+    }
+    if (quietest && totalsByWeek.size > 1) {
+      stats.push({
+        label: 'Minggu Paling Hemat',
+        value: `Minggu ${quietest[0]}`,
+        sub: formatCurrency(quietest[1]),
+        color: '#23835B',
+      });
+    }
+    stats.push({
+      label: 'Transaksi Tercatat',
+      value: String(expenseTxs.length),
+      sub: 'pengeluaran bulan ini',
+      color: '#0F3D3E',
+    });
+    return stats.slice(0, 4);
+  }, [transactions, currentMonthKey, hasTransactions, currentMonth, currentYear]);
+
+  const insightMessage = useMemo(() => {
+    if (categorySlices.length === 0) return '';
+    const top = categorySlices[0];
+    const previousTop = previousBucket.expense === 0 ? 0 : Math.round(((currentBucket.expense - previousBucket.expense) / previousBucket.expense) * 100);
+    const direction = currentBucket.expense === previousBucket.expense
+      ? 'stabil'
+      : currentBucket.expense < previousBucket.expense
+        ? 'turun'
+        : 'naik';
+    const topShare = top.pct;
+    const formattedChange = previousBucket.expense === 0
+      ? `${direction} ${formatCurrency(currentBucket.expense)}`
+      : `${direction} ${Math.abs(previousTop)}%`;
+    return `${monthLabel}: pengeluaran ${formattedChange} dari bulan lalu. Kategori terbesar adalah “${top.label}” (${topShare}% dari total).`;
+  }, [categorySlices, currentBucket.expense, previousBucket.expense, monthLabel]);
+
+  if (!hasTransactions) {
+    return (
+      <KeyboardAwareScrollView
+        enableOnAndroid
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.scrollContent, styles.emptyContent]}
+      >
+        <Animated.View entering={FadeInDown.duration(350)} style={styles.headerRow}>
+          <View>
+            <Text style={[styles.screenTitle, { color: theme.textPrimary }]}>Analitik</Text>
+            <Text style={[styles.screenSubtitle, { color: theme.textMuted }]}>{monthLabel}</Text>
+          </View>
+          <View style={[styles.periodBadge, { backgroundColor: isDark ? theme.surfaceMuted : '#F1F5F9' }]}>
+            <Text style={[styles.periodText, { color: theme.textSecondary }]}>7 bulan</Text>
+          </View>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(60).duration(350)} style={styles.emptyState}>
+          <View style={[styles.emptyIcon, { backgroundColor: theme.accentSoft }]}>
+            <TrendUp color={theme.accentText} size={26} variant="Bold" />
+          </View>
+          <Text style={[styles.emptyTitle, { color: theme.textPrimary }]}>Belum ada analitik</Text>
+          <Text style={[styles.emptyText, { color: theme.textMuted }]}>Catat beberapa transaksi terlebih dahulu. Ringkasan pemasukan, pengeluaran, dan kategori akan muncul di sini.</Text>
+        </Animated.View>
+      </KeyboardAwareScrollView>
+    );
+  }
 
   return (
     <KeyboardAwareScrollView
@@ -301,7 +470,7 @@ export function AnalyticsScreen() {
       <Animated.View entering={FadeInDown.duration(350)} style={styles.headerRow}>
         <View>
           <Text style={[styles.screenTitle, { color: theme.textPrimary }]}>Analitik</Text>
-          <Text style={[styles.screenSubtitle, { color: theme.textMuted }]}>Juli 2026</Text>
+          <Text style={[styles.screenSubtitle, { color: theme.textMuted }]}>{monthLabel}</Text>
         </View>
         <View style={[styles.periodBadge, { backgroundColor: isDark ? theme.surfaceMuted : '#F1F5F9' }]}>
           <Text style={[styles.periodText, { color: theme.textSecondary }]}>7 bulan</Text>
@@ -312,23 +481,23 @@ export function AnalyticsScreen() {
       <Animated.View entering={FadeInDown.delay(60).duration(350)} style={styles.kpiRow}>
         <View style={[styles.kpiCard, { backgroundColor: isDark ? theme.surfaceMuted : '#FFFFFF', borderColor: isDark ? theme.border : '#E2E8F0' }]}>
           <View style={styles.kpiIconWrap}>
-            <ArrowUp color="#10B981" size={14} variant="Bold" />
+            <ArrowUp color="#23835B" size={14} variant="Bold" />
           </View>
           <Text style={[styles.kpiLabel, { color: theme.textMuted }]}>Pemasukan</Text>
-          <Text style={[styles.kpiAmount, { color: theme.textPrimary }]}>{formatCurrency(totalIncome)}</Text>
-          <View style={[styles.kpiBadge, { backgroundColor: '#10B981' + '18' }]}>
-            <Text style={[styles.kpiBadgeText, { color: '#10B981' }]}>+12,3%</Text>
+          <Text style={[styles.kpiAmount, { color: theme.textPrimary }]}>{formatCurrency(currentBucket.income)}</Text>
+          <View style={[styles.kpiBadge, { backgroundColor: '#E6F6EE' }]}>
+            <Text style={[styles.kpiBadgeText, { color: '#23835B' }]}>{incomeDeltaLabel}</Text>
           </View>
         </View>
 
         <View style={[styles.kpiCard, { backgroundColor: isDark ? theme.surfaceMuted : '#FFFFFF', borderColor: isDark ? theme.border : '#E2E8F0' }]}>
           <View style={styles.kpiIconWrap}>
-            <ArrowDown color="#EF4444" size={14} variant="Bold" />
+            <ArrowDown color="#D65B5B" size={14} variant="Bold" />
           </View>
           <Text style={[styles.kpiLabel, { color: theme.textMuted }]}>Pengeluaran</Text>
-          <Text style={[styles.kpiAmount, { color: theme.textPrimary }]}>{formatCurrency(totalExpense)}</Text>
-          <View style={[styles.kpiBadge, { backgroundColor: '#EF4444' + '18' }]}>
-            <Text style={[styles.kpiBadgeText, { color: '#EF4444' }]}>+5,7%</Text>
+          <Text style={[styles.kpiAmount, { color: theme.textPrimary }]}>{formatCurrency(currentBucket.expense)}</Text>
+          <View style={[styles.kpiBadge, { backgroundColor: '#FDECEC' }]}>
+            <Text style={[styles.kpiBadgeText, { color: '#D65B5B' }]}>{expenseDeltaLabel}</Text>
           </View>
         </View>
 
@@ -338,8 +507,8 @@ export function AnalyticsScreen() {
           </View>
           <Text style={[styles.kpiLabel, { color: theme.textMuted }]}>Nabung</Text>
           <Text style={[styles.kpiAmount, { color: theme.textPrimary }]}>{formatCurrency(netSavings)}</Text>
-          <View style={[styles.kpiBadge, { backgroundColor: theme.accent + '18' }]}>
-            <Text style={[styles.kpiBadgeText, { color: isDark ? theme.accent : '#24451F' }]}>{budgetPct}%</Text>
+          <View style={[styles.kpiBadge, { backgroundColor: theme.accentSoft }]}>
+            <Text style={[styles.kpiBadgeText, { color: theme.accentText }]}>{monthLabel}</Text>
           </View>
         </View>
       </Animated.View>
@@ -370,42 +539,44 @@ export function AnalyticsScreen() {
           <View style={[styles.chartCard, styles.glassCard, { backgroundColor: isDark ? 'rgba(12,59,58,0.6)' : 'rgba(255,255,255,0.6)', borderColor: isDark ? 'rgba(30,82,80,0.3)' : 'rgba(212,227,215,0.3)', borderWidth: 1 }]}>
             <View style={styles.chartHeaderRow}>
               <Text style={[styles.chartTitle, { color: theme.textPrimary }]}>Pengeluaran per Kategori</Text>
-              <Text style={[styles.chartSubtitle, { color: theme.textMuted }]}>Juli 2026</Text>
+              <Text style={[styles.chartSubtitle, { color: theme.textMuted }]}>{monthLabel}</Text>
             </View>
 
-            <View style={styles.donutRow}>
-              {/* Donut */}
-              <View style={styles.donutWrap}>
-                <Svg width={DONUT_SIZE} height={DONUT_SIZE}>
-                  {arcs.map((arc, i) => (
-                    <AnimatedDonutArc key={arc.label} arc={arc} delay={i * 100} />
+            {categorySlices.length === 0 ? (
+              <Text style={[styles.emptyHint, { color: theme.textMuted }]}>Belum ada pengeluaran bulan ini.</Text>
+            ) : (
+              <View style={styles.donutRow}>
+                <View style={styles.donutWrap}>
+                  <Svg width={DONUT_SIZE} height={DONUT_SIZE}>
+                    {arcs.map((arc, i) => (
+                      <AnimatedDonutArc key={arc.label} arc={arc} delay={i * 100} />
+                    ))}
+                  </Svg>
+                  <View style={styles.donutCenter}>
+                    <Text style={[styles.donutTotalLabel, { color: theme.textMuted }]}>Total</Text>
+                    <Text style={[styles.donutTotalValue, { color: theme.textPrimary }]}>
+                      {formatCurrency(categorySlices.reduce((s, c) => s + c.amount, 0))}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.donutLegend}>
+                  {categorySlices.map((cat, i) => (
+                    <Animated.View
+                      key={cat.label}
+                      style={styles.legendItem}
+                      entering={FadeInRight.delay(i * 80 + 400).duration(300)}
+                    >
+                      <View style={[styles.legendDot, { backgroundColor: cat.color }]} />
+                      <View style={styles.legendTextWrap}>
+                        <Text style={[styles.legendLabel, { color: theme.textPrimary }]} numberOfLines={1}>{cat.label}</Text>
+                        <Text style={[styles.legendPct, { color: cat.color }]}>{cat.pct}%</Text>
+                      </View>
+                    </Animated.View>
                   ))}
-                </Svg>
-                <View style={styles.donutCenter}>
-                  <Text style={[styles.donutTotalLabel, { color: theme.textMuted }]}>Total</Text>
-                  <Text style={[styles.donutTotalValue, { color: theme.textPrimary }]}>
-                    {formatCurrency(CATEGORIES.reduce((s, c) => s + c.amount, 0))}
-                  </Text>
                 </View>
               </View>
-
-              {/* Legend */}
-              <View style={styles.donutLegend}>
-                {CATEGORIES.map((cat, i) => (
-                  <Animated.View 
-                    key={cat.label} 
-                    style={styles.legendItem}
-                    entering={FadeInRight.delay(i * 80 + 400).duration(300)}
-                  >
-                    <View style={[styles.legendDot, { backgroundColor: cat.color }]} />
-                    <View style={styles.legendTextWrap}>
-                      <Text style={[styles.legendLabel, { color: theme.textPrimary }]} numberOfLines={1}>{cat.label}</Text>
-                      <Text style={[styles.legendPct, { color: cat.color }]}>{cat.pct}%</Text>
-                    </View>
-                  </Animated.View>
-                ))}
-              </View>
-            </View>
+            )}
           </View>
         </Animated.View>
       )}
@@ -418,61 +589,55 @@ export function AnalyticsScreen() {
               <Text style={[styles.chartTitle, { color: theme.textPrimary }]}>Pemasukan vs Pengeluaran</Text>
             </View>
             <View style={styles.legendRow}>
-              <View style={styles.inlineLegend}><View style={[styles.legendDot, { backgroundColor: '#10B981' }]} /><Text style={[styles.legendSmallText, { color: theme.textMuted }]}>Pemasukan</Text></View>
-              <View style={styles.inlineLegend}><View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} /><Text style={[styles.legendSmallText, { color: theme.textMuted }]}>Pengeluaran</Text></View>
+              <View style={styles.inlineLegend}><View style={[styles.legendDot, { backgroundColor: '#23835B' }]} /><Text style={[styles.legendSmallText, { color: theme.textMuted }]}>Pemasukan</Text></View>
+              <View style={styles.inlineLegend}><View style={[styles.legendDot, { backgroundColor: '#D65B5B' }]} /><Text style={[styles.legendSmallText, { color: theme.textMuted }]}>Pengeluaran</Text></View>
             </View>
             <Svg width={CHART_WIDTH} height={CHART_HEIGHT + 24} style={{ marginTop: 12 }}>
               <Defs>
                 <LinearGradient id="incGrad" x1="0" y1="0" x2="0" y2="1">
-                  <Stop offset="0" stopColor="#10B981" stopOpacity="0.28" />
-                  <Stop offset="0.5" stopColor="#10B981" stopOpacity="0.12" />
-                  <Stop offset="1" stopColor="#10B981" stopOpacity="0" />
+                  <Stop offset="0" stopColor="#23835B" stopOpacity="0.28" />
+                  <Stop offset="0.5" stopColor="#23835B" stopOpacity="0.12" />
+                  <Stop offset="1" stopColor="#23835B" stopOpacity="0" />
                 </LinearGradient>
                 <LinearGradient id="expGrad" x1="0" y1="0" x2="0" y2="1">
-                  <Stop offset="0" stopColor="#EF4444" stopOpacity="0.20" />
-                  <Stop offset="0.5" stopColor="#EF4444" stopOpacity="0.08" />
-                  <Stop offset="1" stopColor="#EF4444" stopOpacity="0" />
+                  <Stop offset="0" stopColor="#D65B5B" stopOpacity="0.20" />
+                  <Stop offset="0.5" stopColor="#D65B5B" stopOpacity="0.08" />
+                  <Stop offset="1" stopColor="#D65B5B" stopOpacity="0" />
                 </LinearGradient>
               </Defs>
-              {/* Grid lines */}
               {[0, 0.25, 0.5, 0.75, 1].map((t) => (
-                <Line 
-                  key={t} 
-                  x1="0" 
-                  y1={t * CHART_HEIGHT} 
-                  x2={CHART_WIDTH} 
-                  y2={t * CHART_HEIGHT} 
-                  stroke={isDark ? '#1E3A3A' : '#F1F5F9'} 
-                  strokeWidth="1" 
+                <Line
+                  key={t}
+                  x1="0"
+                  y1={t * CHART_HEIGHT}
+                  x2={CHART_WIDTH}
+                  y2={t * CHART_HEIGHT}
+                  stroke={isDark ? '#1E3A3A' : '#F1F5F9'}
+                  strokeWidth="1"
                   strokeDasharray="4 4"
                 />
               ))}
-              {/* Area fills */}
               <Path d={incomeArea} fill="url(#incGrad)" />
               <Path d={expenseArea} fill="url(#expGrad)" />
-              {/* Animated smooth lines */}
-              <AnimatedLine path={incomePath} color="#10B981" delay={0} />
-              <AnimatedLine path={expensePath} color="#EF4444" delay={200} />
-              {/* Animated data point dots - Income */}
+              <AnimatedLine path={incomePath} color="#23835B" delay={0} />
+              <AnimatedLine path={expensePath} color="#D65B5B" delay={200} />
               {incomePoints.map((pt, i) => (
-                <AnimatedDataDot key={`inc-${i}`} x={pt.x} y={pt.y} color="#10B981" delay={1200 + i * 60} />
+                <AnimatedDataDot key={`inc-${i}`} x={pt.x} y={pt.y} color="#23835B" delay={1200 + i * 60} />
               ))}
-              {/* Animated data point dots - Expense */}
               {expensePoints.map((pt, i) => (
-                <AnimatedDataDot key={`exp-${i}`} x={pt.x} y={pt.y} color="#EF4444" delay={1400 + i * 60} />
+                <AnimatedDataDot key={`exp-${i}`} x={pt.x} y={pt.y} color="#D65B5B" delay={1400 + i * 60} />
               ))}
-              {/* X-axis labels */}
-              {MONTHS_SHORT.map((m, i) => (
+              {monthBuckets.map((bucket, i) => (
                 <SvgText
-                  key={m}
-                  x={(i * CHART_WIDTH) / (MONTHS_SHORT.length - 1)}
+                  key={bucket.key}
+                  x={(i * CHART_WIDTH) / (monthBuckets.length - 1)}
                   y={CHART_HEIGHT + 16}
                   fontSize="10"
                   fontWeight="600"
                   fill={isDark ? '#64748B' : '#94A3B8'}
                   textAnchor="middle"
                 >
-                  {m}
+                  {bucket.label}
                 </SvgText>
               ))}
             </Svg>
@@ -488,11 +653,11 @@ export function AnalyticsScreen() {
               <Text style={[styles.chartTitle, { color: theme.textPrimary }]}>Tabungan Bersih Bulanan</Text>
             </View>
             <View style={styles.barRow}>
-              {NET_SAVINGS.map((val, i) => {
-                const maxVal = Math.max(...NET_SAVINGS);
-                const isLast = i === NET_SAVINGS.length - 1;
+              {netSavingsSeries.map((val, i) => {
+                const maxVal = Math.max(...netSavingsSeries, 0);
+                const isLast = i === netSavingsSeries.length - 1;
                 return (
-                  <AnimatedBarColumn 
+                  <AnimatedBarColumn
                     key={i}
                     val={val}
                     index={i}
@@ -500,7 +665,7 @@ export function AnalyticsScreen() {
                     isLast={isLast}
                     theme={theme}
                     isDark={isDark}
-                    month={MONTHS_SHORT[i]}
+                    month={monthBuckets[i].label}
                   />
                 );
               })}
@@ -510,47 +675,42 @@ export function AnalyticsScreen() {
       )}
 
       {/* ── AI Insight Card ── */}
-      <Animated.View entering={FadeInDown.delay(200).duration(350)}>
-        <View style={[styles.insightCard, styles.glassCard, { backgroundColor: isDark ? 'rgba(13,43,31,0.7)' : 'rgba(240,253,244,0.7)', borderColor: isDark ? 'rgba(22,101,52,0.4)' : 'rgba(187,247,208,0.4)' }]}>
-          <View style={styles.insightHeader}>
-            <View style={styles.insightIconWrap}>
-              <CpuCharge color="#16A34A" size={15} variant="Bold" />
+      {categorySlices.length > 0 ? (
+        <Animated.View entering={FadeInDown.delay(200).duration(350)}>
+          <View style={[styles.insightCard, styles.glassCard, { backgroundColor: isDark ? 'rgba(13,43,31,0.7)' : 'rgba(240,253,244,0.7)', borderColor: isDark ? 'rgba(22,101,52,0.4)' : 'rgba(187,247,208,0.4)' }]}>
+            <View style={styles.insightHeader}>
+              <View style={styles.insightIconWrap}>
+                <CpuCharge color="#23835B" size={15} variant="Bold" />
+              </View>
+              <Text style={styles.insightBadge}>INSIGHT BULAN INI</Text>
             </View>
-            <Text style={styles.insightBadge}>AI INSIGHT</Text>
+            <Text style={[styles.insightText, { color: theme.textPrimary }]}>
+              {insightMessage}
+            </Text>
+            <TouchableOpacity activeOpacity={0.7} style={styles.insightBtn}>
+              <Text style={styles.insightBtnText}>Tanya AI</Text>
+            </TouchableOpacity>
           </View>
-          <Text style={[styles.insightText, { color: theme.textPrimary }]}>
-            Pengeluaran Juli turun{' '}
-            <Text style={{ fontWeight: '800', color: '#10B981' }}>11,3%</Text> dari Juni.
-            Tapi <Text style={{ fontWeight: '800', color: '#EF4444' }}>Hiburan naik 24%</Text> —
-            alokasi ke Dana Darurat yang baru{' '}
-            <Text style={{ fontWeight: '800', color: '#D97706' }}>33% target</Text>.
-          </Text>
-          <TouchableOpacity activeOpacity={0.7} style={styles.insightBtn}>
-            <Text style={styles.insightBtnText}>Tanya AI</Text>
-          </TouchableOpacity>
-        </View>
-      </Animated.View>
+        </Animated.View>
+      ) : null}
 
       {/* ── Quick Stats ── */}
-      <Animated.View entering={FadeInDown.delay(260).duration(350)}>
-        <View style={[styles.statsCard, styles.glassCard, { backgroundColor: isDark ? 'rgba(12,59,58,0.6)' : 'rgba(255,255,255,0.6)', borderColor: isDark ? 'rgba(30,82,80,0.3)' : 'rgba(212,227,215,0.3)' }]}>
-          <Text style={[styles.chartTitle, { color: theme.textPrimary }]}>Statistik Bulan Ini</Text>
-          <View style={styles.statsGrid}>
-            {[
-              { label: 'Hari Terboros', value: 'Sabtu', sub: 'avg Rp 185rb', color: '#EF4444' },
-              { label: 'Kategori Terbesar', value: 'Makan', sub: '26% total', color: '#FF6B35' },
-              { label: 'Minggu Terhemat', value: 'Minggu 2', sub: 'Rp 780rb', color: '#10B981' },
-              { label: 'Skor Keuangan', value: '74/100', sub: '+6 poin', color: '#A3E635' },
-            ].map((item) => (
-              <View key={item.label} style={[styles.statItem, { backgroundColor: isDark ? 'rgba(10,46,45,0.5)' : 'rgba(248,250,252,0.5)' }]}>
-                <Text style={[styles.statValue, { color: item.color }]}>{item.value}</Text>
-                <Text style={[styles.statLabel, { color: theme.textPrimary }]}>{item.label}</Text>
-                <Text style={[styles.statSub, { color: theme.textMuted }]}>{item.sub}</Text>
-              </View>
-            ))}
+      {quickStats.length > 0 ? (
+        <Animated.View entering={FadeInDown.delay(260).duration(350)}>
+          <View style={[styles.statsCard, styles.glassCard, { backgroundColor: isDark ? 'rgba(12,59,58,0.6)' : 'rgba(255,255,255,0.6)', borderColor: isDark ? 'rgba(30,82,80,0.3)' : 'rgba(212,227,215,0.3)' }]}>
+            <Text style={[styles.chartTitle, { color: theme.textPrimary }]}>Statistik Bulan Ini</Text>
+            <View style={styles.statsGrid}>
+              {quickStats.map((item) => (
+                <View key={item.label} style={[styles.statItem, { backgroundColor: isDark ? 'rgba(10,46,45,0.5)' : 'rgba(248,250,252,0.5)' }]}>
+                  <Text style={[styles.statValue, { color: item.color }]}>{item.value}</Text>
+                  <Text style={[styles.statLabel, { color: theme.textPrimary }]}>{item.label}</Text>
+                  <Text style={[styles.statSub, { color: theme.textMuted }]}>{item.sub}</Text>
+                </View>
+              ))}
+            </View>
           </View>
-        </View>
-      </Animated.View>
+        </Animated.View>
+      ) : null}
 
     </KeyboardAwareScrollView>
   );
@@ -562,6 +722,41 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 120,
     gap: 16,
+  },
+  emptyContent: {
+    flexGrow: 1,
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+    paddingBottom: 80,
+  },
+  emptyIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  emptyText: {
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: 'center',
+    maxWidth: 280,
+  },
+  emptyHint: {
+    fontSize: 12,
+    lineHeight: 18,
+    paddingVertical: 16,
+    textAlign: 'center',
   },
   headerRow: {
     flexDirection: 'row',

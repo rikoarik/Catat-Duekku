@@ -55,10 +55,6 @@ export function Card({
 
 const styles = StyleSheet.create({
   card: {
-    shadowColor: '#0F3D3E',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.06,
-    shadowRadius: 12,
-    elevation: 3,
+    boxShadow: '0px 6px 12px rgba(15, 61, 62, 0.06)',
   },
 });
