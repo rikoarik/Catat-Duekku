@@ -31,7 +31,16 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
+
+# Backups
+src.backup-*/
+**/*.backup-*/
+
+# Agent configurations
+.agents/
+.claude/
 
 # typescript
 *.tsbuildinfo
