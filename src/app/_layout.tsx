@@ -4,7 +4,9 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useColorScheme, View } from 'react-native';
 import { useFonts } from 'expo-font';
 import { AnimatedSplashScreen } from '@/components/splash-screen';
+import { LanguageProvider } from '@/core/i18n/language-context';
 import { getTheme } from '@/core/theme/colors';
+import { usePushNotifications } from '@/core/lib/push-notifications';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -12,6 +14,7 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
   const theme = getTheme(colorScheme);
   const [splashFinished, setSplashFinished] = useState(false);
+  usePushNotifications();
   
   const [fontsLoaded] = useFonts({
     'ClashDisplay-Regular': require('../../assets/fonts/ClashDisplay-Regular.otf'),
@@ -31,11 +34,13 @@ export default function RootLayout() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.background }}>
-      <Stack screenOptions={{ headerShown: false }} />
-      {!splashFinished && (
-        <AnimatedSplashScreen onFinish={() => setSplashFinished(true)} />
-      )}
-    </View>
+    <LanguageProvider>
+      <View style={{ flex: 1, backgroundColor: theme.background }}>
+        <Stack screenOptions={{ headerShown: false }} />
+        {!splashFinished && (
+          <AnimatedSplashScreen onFinish={() => setSplashFinished(true)} />
+        )}
+      </View>
+    </LanguageProvider>
   );
 }

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Konfirmasi email Catat Duekku</title>
+</head>
+<body style="margin:0;padding:0;background:#F3F7F5;font-family:Arial,Helvetica,sans-serif;color:#0F3D3E;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#F3F7F5;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;">
+          <tr>
+            <td style="padding:0 4px 20px;">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td align="center" valign="middle" width="44" height="44" style="width:44px;height:44px;border-radius:14px;background:#0F3D3E;color:#B7E36D;font-size:21px;font-weight:800;">D</td>
+                  <td style="padding-left:12px;font-size:18px;font-weight:800;color:#0F3D3E;">Catat Duekku</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#FFFFFF;border:1px solid #D4E3D7;border-radius:24px;padding:36px 32px;">
+              <div style="font-size:12px;line-height:18px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#6A817D;">Satu langkah lagi</div>
+              <h1 style="margin:12px 0 14px;font-size:30px;line-height:38px;letter-spacing:-0.7px;color:#0F3D3E;">Konfirmasi email Anda</h1>
+              <p style="margin:0;font-size:15px;line-height:24px;color:#526C68;">Halo{{ if .Data.full_name }}, {{ .Data.full_name }}{{ end }}. Klik tombol berikut untuk mengaktifkan akun dan mulai mencatat keuangan dengan aman.</p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:28px 0 22px;">
+                <tr>
+                  <td align="center" style="border-radius:999px;background:#0F3D3E;">
+                    <a href="{{ .ConfirmationURL }}" style="display:block;padding:16px 24px;color:#FFFFFF;text-decoration:none;font-size:15px;font-weight:800;">Konfirmasi email</a>
+                  </td>
+                </tr>
+              </table>
+              <div style="padding:16px 18px;border-radius:16px;background:#E6F4F1;color:#365B57;font-size:13px;line-height:20px;">Setelah dikonfirmasi, buka aplikasi Catat Duekku lalu masuk menggunakan email <strong>{{ .Email }}</strong>.</div>
+              <p style="margin:24px 0 0;font-size:12px;line-height:19px;color:#78908C;">Jika Anda tidak membuat akun ini, abaikan email ini. Jangan teruskan tautan konfirmasi kepada siapa pun.</p>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:20px 16px 0;font-size:11px;line-height:18px;color:#78908C;">Catat Duekku · Keuangan pribadi lebih terarah</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

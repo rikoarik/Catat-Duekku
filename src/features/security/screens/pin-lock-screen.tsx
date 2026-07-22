@@ -16,8 +16,9 @@ import { PinDots } from '@/components/ui/pin-dots';
 import { PinPad } from '@/components/ui/pin-pad';
 import { StatusModal } from '@/components/ui/status-modal';
 import { getTheme } from '@/core/theme/colors';
-import { verifyPin, isBiometricEnabled, clearPin } from '@/core/lib/pin-storage';
+import { verifyPin, isBiometricEnabled } from '@/core/lib/pin-storage';
 import { supabase } from '@/core/lib/supabase';
+import { unregisterCurrentPushToken } from '@/core/lib/push-notifications';
 
 const PIN_LENGTH = 6;
 
@@ -67,7 +68,7 @@ export function PinLockScreen() {
     })();
   }, []);
 
-  const tryBiometric = async () => {
+  async function tryBiometric() {
     try {
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: 'Masuk ke Catat Duekku',
@@ -77,13 +78,11 @@ export function PinLockScreen() {
       if (result.success) {
         router.replace('/(main)');
       }
-    } catch {
-      // Fallback to PIN entry
-    }
-  };
+    } catch {}
+  }
 
   const handleDigit = (digit: string) => {
-    if (pin.length >= PIN_LENGTH || loading) return;
+    if (pin.length >= PIN_LENGTH || loading || errorCount >= 5) return;
     const next = pin + digit;
     setPin(next);
     if (next.length === PIN_LENGTH) {
@@ -112,11 +111,8 @@ export function PinLockScreen() {
             visible: true,
             type: 'error',
             title: 'Terlalu Banyak Percobaan',
-            message: 'Anda telah salah memasukkan PIN sebanyak 5 kali. Silakan coba lagi setelah beberapa saat.',
-            onConfirm: () => {
-              setModalState((prev) => ({ ...prev, visible: false }));
-              setErrorCount(0);
-            },
+            message: 'Anda telah salah memasukkan PIN sebanyak 5 kali. Gunakan Lupa PIN atau keluar dari akun.',
+            onConfirm: () => setModalState((prev) => ({ ...prev, visible: false })),
           });
         } else {
           setModalState({
@@ -134,7 +130,7 @@ export function PinLockScreen() {
   };
 
   const handleLogout = async () => {
-    await clearPin();
+    await unregisterCurrentPushToken().catch(() => {});
     await supabase.auth.signOut();
     router.replace('/auth');
   };

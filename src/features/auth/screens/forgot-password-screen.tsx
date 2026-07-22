@@ -1,21 +1,20 @@
-import { Text } from '@/components/ui/text';
-import React, { useState } from 'react';
-import { StyleSheet, View, TouchableOpacity, useColorScheme, Platform, ActivityIndicator } from 'react-native';
-;
+import { useState } from 'react';
+import { ActivityIndicator, Platform, StyleSheet, TouchableOpacity, View, useColorScheme } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
-import { Sms } from 'iconsax-react-native';
 import { router } from 'expo-router';
-import { ArrowLeft } from 'iconsax-react-native';
+import { ArrowLeft, Sms } from 'iconsax-react-native';
+
 import { ScreenWrapper } from '@/components/common/screen-wrapper';
 import { Input } from '@/components/ui/input';
 import { StatusModal } from '@/components/ui/status-modal';
-import { getTheme } from '@/core/theme/colors';
+import { Text } from '@/components/ui/text';
+import { useLanguage } from '@/core/i18n/language-context';
 import { supabase } from '@/core/lib/supabase';
+import { getTheme } from '@/core/theme/colors';
 
 export function ForgotPasswordScreen() {
-  const colorScheme = useColorScheme();
-  const theme = getTheme(colorScheme);
-
+  const theme = getTheme(useColorScheme());
+  const { t } = useLanguage();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [modalState, setModalState] = useState<{
@@ -26,12 +25,7 @@ export function ForgotPasswordScreen() {
     onConfirm: () => void;
   }>({ visible: false, type: 'success', title: '', message: '', onConfirm: () => {} });
 
-  const triggerModal = (
-    type: 'success' | 'error',
-    title: string,
-    message: string,
-    onConfirmCallback?: () => void
-  ) => {
+  const triggerModal = (type: 'success' | 'error', title: string, message: string, onConfirmCallback?: () => void) => {
     setModalState({
       visible: true,
       type,
@@ -45,161 +39,51 @@ export function ForgotPasswordScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!email.trim()) {
-      triggerModal('error', 'Email Kosong', 'Masukkan alamat email Anda terlebih dahulu.');
-      return;
-    }
-
+    const address = email.trim();
+    if (!address) return triggerModal('error', t('auth.forgotPasswordEmptyTitle'), t('auth.forgotPasswordEmptyMessage'));
     setLoading(true);
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: 'catatduekku://reset-password',
-      });
-
-      if (error) {
-        triggerModal(
-          'error',
-          'Gagal Mengirim Email',
-          error.message || 'Terjadi kesalahan. Silakan coba lagi.'
-        );
-      } else {
-        triggerModal(
-          'success',
-          'Email Terkirim!',
-          `Link reset kata sandi telah dikirimkan ke ${email.trim()}. Periksa inbox atau folder spam Anda.`,
-          () => router.back()
-        );
-      }
+      const { error } = await supabase.auth.resetPasswordForEmail(address, { redirectTo: 'https://web-auth-seven.vercel.app/reset-password' });
+      if (error) throw error;
+      triggerModal('success', t('auth.forgotPasswordSentTitle'), t('auth.forgotPasswordSentMessage').replace('{email}', address), () => router.back());
+    } catch (error) {
+      triggerModal('error', t('auth.forgotPasswordFailedTitle'), error instanceof Error ? error.message : t('auth.forgotPasswordFailedMessage'));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <ScreenWrapper withSafeArea style={{ backgroundColor: '#FFFFFF' }}>
-      <KeyboardAwareScrollView
-        contentContainerStyle={styles.scrollContent}
-        enableOnAndroid
-        extraScrollHeight={Platform.OS === 'ios' ? 20 : 40}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}>
-
-        {/* Back Button */}
-        <TouchableOpacity
-          activeOpacity={0.7}
-          style={styles.backBtn}
-          onPress={() => router.back()}>
+    <ScreenWrapper withSafeArea style={{ backgroundColor: theme.background }}>
+      <KeyboardAwareScrollView contentContainerStyle={styles.scrollContent} enableOnAndroid extraScrollHeight={Platform.OS === 'ios' ? 20 : 40} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <TouchableOpacity accessibilityLabel={t('auth.forgotPasswordBackAccessibility')} activeOpacity={0.7} style={[styles.backBtn, { backgroundColor: theme.surfaceButton, borderColor: theme.border }]} onPress={() => router.back()}>
           <ArrowLeft color={theme.textPrimary} size={22} variant="Outline" />
         </TouchableOpacity>
-
-        {/* Title */}
         <View style={styles.titleSection}>
-          <Text style={[styles.title, { color: theme.textPrimary }]}>Lupa Kata Sandi?</Text>
-          <Text style={[styles.subtitle, { color: theme.textMuted }]}>
-            Masukkan email akun Anda. Kami akan mengirimkan link untuk membuat kata sandi baru.
-          </Text>
+          <Text style={[styles.title, { color: theme.textPrimary }]}>{t('auth.forgotPasswordTitle')}</Text>
+          <Text style={[styles.subtitle, { color: theme.textMuted }]}>{t('auth.forgotPasswordSubtitle')}</Text>
         </View>
-
-        {/* Email Input */}
-        <Input
-          autoCapitalize="none"
-          keyboardType="email-address"
-          label="Alamat Email"
-          leftIcon={<Sms color={theme.textMuted} size={20} variant="Outline" />}
-          placeholder="nama@email.com"
-          value={email}
-          onChangeText={setEmail}
-        />
-
-        {/* Submit Button */}
-        <TouchableOpacity
-          activeOpacity={0.88}
-          disabled={loading}
-          style={[styles.submitBtn, { backgroundColor: theme.primary, opacity: loading ? 0.7 : 1 }]}
-          onPress={handleSubmit}>
-          {loading ? (
-            <ActivityIndicator color="#FFFFFF" size="small" />
-          ) : (
-            <Text style={styles.submitBtnText}>Kirim Link Reset</Text>
-          )}
+        <Input autoCapitalize="none" keyboardType="email-address" label={t('auth.emailLabel')} leftIcon={<Sms color={theme.textMuted} size={20} variant="Outline" />} placeholder={t('auth.emailPlaceholder')} value={email} onChangeText={setEmail} />
+        <TouchableOpacity activeOpacity={0.88} disabled={loading} style={[styles.submitBtn, { backgroundColor: theme.primary, opacity: loading ? 0.7 : 1 }]} onPress={handleSubmit}>
+          {loading ? <ActivityIndicator color={theme.onPrimary} size="small" /> : <Text style={[styles.submitBtnText, { color: theme.onPrimary }]}>{t('auth.forgotPasswordSubmit')}</Text>}
         </TouchableOpacity>
-
-        {/* Back to login link */}
-        <TouchableOpacity
-          activeOpacity={0.7}
-          style={styles.backToLoginBtn}
-          onPress={() => router.back()}>
-          <Text style={[styles.backToLoginText, { color: theme.textMuted }]}>
-            Kembali ke halaman masuk
-          </Text>
+        <TouchableOpacity activeOpacity={0.7} style={styles.backToLoginBtn} onPress={() => router.back()}>
+          <Text style={[styles.backToLoginText, { color: theme.textMuted }]}>{t('auth.forgotPasswordBackToLogin')}</Text>
         </TouchableOpacity>
-
       </KeyboardAwareScrollView>
-
-      <StatusModal
-        visible={modalState.visible}
-        type={modalState.type}
-        title={modalState.title}
-        message={modalState.message}
-        buttonText={modalState.type === 'success' ? 'Oke, Mengerti' : 'Coba Lagi'}
-        onConfirm={modalState.onConfirm}
-        onClose={() => setModalState((prev) => ({ ...prev, visible: false }))}
-      />
+      <StatusModal visible={modalState.visible} type={modalState.type} title={modalState.title} message={modalState.message} buttonText={modalState.type === 'success' ? t('common.understand') : t('common.tryAgain')} onConfirm={modalState.onConfirm} onClose={() => setModalState((prev) => ({ ...prev, visible: false }))} />
     </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
-  scrollContent: {
-    flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingTop: Platform.OS === 'ios' ? 12 : 20,
-    paddingBottom: 36,
-    gap: 20,
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  titleSection: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    letterSpacing: -0.6,
-  },
-  subtitle: {
-    fontSize: 14,
-    lineHeight: 22,
-  },
-  submitBtn: {
-    height: 54,
-    borderRadius: 100,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0C3B3A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  submitBtnText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  backToLoginBtn: {
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
-  backToLoginText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
+  scrollContent: { flexGrow: 1, paddingHorizontal: 24, paddingTop: Platform.OS === 'ios' ? 12 : 20, paddingBottom: 36, gap: 20 },
+  backBtn: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  titleSection: { gap: 8, marginBottom: 8 },
+  title: { fontSize: 28, fontWeight: '800', letterSpacing: -0.6 },
+  subtitle: { fontSize: 14, lineHeight: 22 },
+  submitBtn: { height: 54, borderRadius: 100, alignItems: 'center', justifyContent: 'center' },
+  submitBtnText: { fontSize: 16, fontWeight: '700' },
+  backToLoginBtn: { alignItems: 'center', paddingVertical: 4 },
+  backToLoginText: { fontSize: 14, fontWeight: '500' },
 });

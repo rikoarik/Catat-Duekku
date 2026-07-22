@@ -1,20 +1,20 @@
-import React, { useEffect } from 'react';
+import { getTheme } from '@/core/theme/colors';
+import * as Haptics from 'expo-haptics';
+import { Chart, Home3, Profile, Scan, Setting2 } from 'iconsax-react-native';
+import { useEffect } from 'react';
 import {
-  StyleSheet,
-  View,
-  TouchableOpacity,
   Platform,
+  StyleSheet,
+  TouchableOpacity,
   useColorScheme,
+  View,
 } from 'react-native';
 import Animated, {
-  useSharedValue,
   useAnimatedStyle,
-  withSpring,
+  useSharedValue,
   withSequence,
+  withSpring,
 } from 'react-native-reanimated';
-import { Home3, Setting2, Chart, Profile, Scan } from 'iconsax-react-native';
-import * as Haptics from 'expo-haptics';
-import { getTheme } from '@/core/theme/colors';
 
 export type NavTab = 'home' | 'manage' | 'analytics' | 'profile';
 
@@ -34,7 +34,6 @@ export function FloatingGlassNav({
 }: FloatingGlassNavProps) {
   const colorScheme = useColorScheme();
   const theme = getTheme(colorScheme);
-  const isDark = colorScheme === 'dark';
 
   const activeIndex = TABS.indexOf(activeTab);
 
@@ -75,8 +74,8 @@ export function FloatingGlassNav({
             style={[
               styles.navPill,
               {
-                backgroundColor: isDark ? theme.background : theme.deepTeal,
-                borderColor: isDark ? 'rgba(255, 255, 255, 0.18)' : theme.border,
+                backgroundColor: theme.deepTeal,
+                borderColor: theme.border,
               },
             ]}>
             {/* Sliding Indicator Circle */}
@@ -144,13 +143,13 @@ export function FloatingGlassNav({
           style={[
             styles.scanButton,
             {
-              backgroundColor: isDark ? theme.softLime : theme.deepTeal,
-              borderColor: isDark ? 'rgba(255, 255, 255, 0.18)' : theme.border,
+              backgroundColor: theme.primary,
+              borderColor: theme.border,
             },
           ]}
           onPress={handleScanPress}>
           <Scan
-            color={isDark ? theme.onPrimary : theme.onPrimary}
+            color={theme.onPrimary}
             size={34}
             variant="Linear"
           />

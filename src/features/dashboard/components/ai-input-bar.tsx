@@ -10,7 +10,7 @@ import { formatCurrency } from '@/core/utils/formatters';
 interface AiInputBarProps {
   placeholder?: string;
   onSubmit?: (text: string, result: ParseResult) => void;
-  onConfirmPreview?: (result: ParseResult) => void;
+  onConfirmPreview?: (result: ParseResult) => Promise<void>;
 }
 
 const INTENT_LABEL: Record<string, { verb: string; tone: 'income' | 'expense' | 'neutral' }> = {
@@ -41,21 +41,38 @@ export function AiInputBar({
   const [text, setText] = useState('');
   const [result, setResult] = useState<ParseResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleChangeText = (value: string) => {
+    const trimmed = value.trim();
+    setText(value);
+    setError('');
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (!trimmed) {
+      setLoading(false);
+      setResult(null);
+      return;
+    }
+
+    setLoading(true);
+  };
 
   // Debounced parse on every keystroke
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!text.trim()) {
-      setResult(null);
-      setLoading(false);
       return;
     }
-    setLoading(true);
+
     debounceRef.current = setTimeout(async () => {
       try {
-        const parsed = await parseInput(text, true);
+        const parsed = await parseInput(text);
         setResult(parsed);
+      } catch (cause) {
+        setResult(null);
+        setError(cause instanceof Error ? cause.message : 'Gagal memproses input.');
       } finally {
         setLoading(false);
       }
@@ -65,19 +82,25 @@ export function AiInputBar({
     };
   }, [text]);
 
-  const handleSubmit = () => {
-    if (!text.trim() || !result) return;
-    onSubmit?.(text.trim(), result);
-    // optimistic clear after submit
-    setText('');
-    setResult(null);
+  const handleConfirm = async () => {
+    if (!result || !onConfirmPreview) return;
+    setLoading(true);
+    setError('');
+    try {
+      await onConfirmPreview(result);
+      setText('');
+      setResult(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Gagal menyimpan transaksi.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleConfirm = () => {
-    if (!result) return;
-    onConfirmPreview?.(result);
-    setText('');
-    setResult(null);
+  const handleSubmit = async () => {
+    if (!text.trim() || !result) return;
+    onSubmit?.(text.trim(), result);
+    if (onConfirmPreview) await handleConfirm();
   };
 
   const label = result ? INTENT_LABEL[result.intent] ?? INTENT_LABEL.unknown : null;
@@ -113,7 +136,7 @@ export function AiInputBar({
         </View>
         <TextInput
           value={text}
-          onChangeText={setText}
+          onChangeText={handleChangeText}
           placeholder={placeholder}
           placeholderTextColor={theme.textMuted}
           style={[styles.input, { color: theme.textPrimary }]}
@@ -142,7 +165,7 @@ export function AiInputBar({
         </TouchableOpacity>
       </View>
 
-      {/* Live preview chip */}
+      {error ? <Text style={{ color: theme.expense }}>{error}</Text> : null}
       {result && (
         <Animated.View
           entering={FadeInDown.duration(200)}

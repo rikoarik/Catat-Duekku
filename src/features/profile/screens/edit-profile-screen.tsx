@@ -1,110 +1,33 @@
-import { Text } from '@/components/ui/text';
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import {
-  StyleSheet,
-  View,
-  TouchableOpacity,
-  useColorScheme,
-  Platform,
   ActivityIndicator,
-  Alert,
+  Platform,
+  StyleSheet,
+  TouchableOpacity,
+  View,
+  useColorScheme,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
-import { ArrowLeft, User, Sms } from 'iconsax-react-native';
+import { ArrowLeft, Sms, User } from 'iconsax-react-native';
 import { router } from 'expo-router';
 
 import { ScreenWrapper } from '@/components/common/screen-wrapper';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { StatusModal } from '@/components/ui/status-modal';
+import { Text } from '@/components/ui/text';
+import { t } from '@/core/i18n/strings';
 import { getTheme } from '@/core/theme/colors';
-import { supabase } from '@/core/lib/supabase';
+import { useEditProfileForm } from '@/features/profile/hooks/use-edit-profile-form';
 
 export function EditProfileScreen() {
   const colorScheme = useColorScheme();
   const theme = getTheme(colorScheme);
+  const { loading, fetching, fullName, email, statusModal, setFullName, handleSave } =
+    useEditProfileForm();
 
-  const [loading, setLoading] = useState(false);
-  const [fetching, setFetching] = useState(true);
-  const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
-
-  const [statusModal, setStatusModal] = useState<{
-    visible: boolean;
-    type: 'success' | 'error';
-    title: string;
-    message: string;
-    onConfirm: () => void;
-  }>({
-    visible: false,
-    type: 'success',
-    title: '',
-    message: '',
-    onConfirm: () => {},
-  });
-
-  useEffect(() => {
-    const fetchUser = async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          setFullName(user.user_metadata?.full_name || '');
-          setEmail(user.email || '');
-        }
-      } catch (err) {
-        console.error('Error fetching user for edit:', err);
-      } finally {
-        setFetching(false);
-      }
-    };
-    fetchUser();
-  }, []);
-
-  const handleSave = async () => {
-    if (!fullName.trim()) {
-      Alert.alert('Input Tidak Lengkap', 'Nama lengkap wajib diisi.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const { error } = await supabase.auth.updateUser({
-        data: { full_name: fullName.trim() },
-      });
-
-      if (error) {
-        setStatusModal({
-          visible: true,
-          type: 'error',
-          title: 'Gagal Memperbarui',
-          message: error.message || 'Terjadi kesalahan saat menyimpan profil Anda.',
-          onConfirm: () => setStatusModal(prev => ({ ...prev, visible: false })),
-        });
-      } else {
-        setStatusModal({
-          visible: true,
-          type: 'success',
-          title: 'Profil Diperbarui',
-          message: 'Nama lengkap profil Anda telah berhasil diubah.',
-          onConfirm: () => {
-            setStatusModal(prev => ({ ...prev, visible: false }));
-            router.back();
-          },
-        });
-      }
-    } catch (err: any) {
-      setStatusModal({
-        visible: true,
-        type: 'error',
-        title: 'Error',
-        message: err.message || 'Terjadi kesalahan sistem.',
-        onConfirm: () => setStatusModal(prev => ({ ...prev, visible: false })),
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const saveButtonTitle = loading ? t('profile.saving') : t('profile.saveChanges');
 
   return (
     <ScreenWrapper withSafeArea style={{ backgroundColor: theme.surfaceHighlight }}>
@@ -115,7 +38,6 @@ export function EditProfileScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Back Button */}
         <TouchableOpacity
           activeOpacity={0.7}
           style={[styles.backBtn, { borderColor: theme.border }]}
@@ -124,13 +46,12 @@ export function EditProfileScreen() {
           <ArrowLeft color={theme.textPrimary} size={22} variant="Outline" />
         </TouchableOpacity>
 
-        {/* Title */}
         <View style={styles.titleSection}>
           <Text style={[styles.title, { color: theme.textPrimary }]} weight="bold">
-            Edit Profil
+            {t('profile.editTitle')}
           </Text>
           <Text style={[styles.subtitle, { color: theme.textMuted }]}>
-            Perbarui data diri Anda yang terhubung dengan cloud
+            {t('profile.editSubtitle')}
           </Text>
         </View>
 
@@ -139,30 +60,27 @@ export function EditProfileScreen() {
         ) : (
           <Card variant="default" style={styles.formCard}>
             <View style={styles.form}>
-              {/* Full Name Input */}
               <Input
-                label="Nama Lengkap"
-                placeholder="Masukkan nama lengkap Anda"
+                label={t('profile.fullNameLabel')}
+                placeholder={t('profile.fullNamePlaceholder')}
                 leftIcon={<User color={theme.textMuted} size={20} variant="Outline" />}
                 value={fullName}
                 onChangeText={setFullName}
                 autoCapitalize="words"
               />
 
-              {/* Email (Read-Only) */}
               <Input
                 editable={false}
-                label="Alamat Email (Tidak dapat diubah)"
-                placeholder="email@domain.com"
+                label={t('profile.emailReadOnlyLabel')}
+                placeholder={t('auth.emailPlaceholder')}
                 leftIcon={<Sms color={theme.textMuted} size={20} variant="Outline" />}
                 value={email}
                 onChangeText={() => {}}
                 style={styles.disabledInput}
               />
 
-              {/* Save Button */}
               <Button
-                title={loading ? 'Menyimpan...' : 'Simpan Perubahan'}
+                title={saveButtonTitle}
                 disabled={loading}
                 variant="primary"
                 size="large"
@@ -173,13 +91,12 @@ export function EditProfileScreen() {
           </Card>
         )}
 
-        {/* Status Feedback */}
         <StatusModal
           visible={statusModal.visible}
           type={statusModal.type}
           title={statusModal.title}
           message={statusModal.message}
-          buttonText="Lanjutkan"
+          buttonText={t('common.continue')}
           onConfirm={statusModal.onConfirm}
         />
       </KeyboardAwareScrollView>

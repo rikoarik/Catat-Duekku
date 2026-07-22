@@ -9,21 +9,9 @@ import {
   Alert,
   Dimensions,
   Image,
-  Modal,
-  Pressable,
 } from 'react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withRepeat,
-  withTiming,
-  withSequence,
-  Easing,
-  FadeInDown,
-  FadeInUp,
-  ZoomIn,
-} from 'react-native-reanimated';
+import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import {
   ArrowLeft,
   Camera as CameraIcon,
@@ -38,14 +26,9 @@ import {
   Flash,
   FlashSlash,
   Refresh,
-  Magicpen,
-  CloseCircle,
-  TickCircle,
-  Scan,
-  Setting4,
 } from 'iconsax-react-native';
 import { router } from 'expo-router';
-import { CameraView, useCameraPermissions, FlashMode } from 'expo-camera';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 
@@ -55,42 +38,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { StatusModal } from '@/components/ui/status-modal';
 import { getTheme } from '@/core/theme/colors';
-import { financeStore } from '@/core/lib/finance-store';
+import { edgeApi, idempotencyKey, type Account, type Category as ApiCategory, type ParserResponse } from '@/core/lib/edge-api';
+import { t } from '@/core/i18n/strings';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const VIEWFINDER_HEIGHT = SCREEN_HEIGHT * 0.73; // Make camera taller without going full screen
-
-interface MockReceipt {
-  name: string;
-  vendor: string;
-  amount: number;
-  category: string;
-  accountName: string;
-}
-
-const MOCK_RECEIPTS: MockReceipt[] = [
-  {
-    name: 'Makan Harian (Warung Bu Edi)',
-    vendor: 'Warung Nasi Bu Edi',
-    amount: 45000,
-    category: 'Makan & Harian',
-    accountName: 'Cash',
-  },
-  {
-    name: 'Bensin Pertamax (SPBU Menteng)',
-    vendor: 'Pertamina SPBU 31.102',
-    amount: 120000,
-    category: 'Transportasi',
-    accountName: 'Bank',
-  },
-  {
-    name: 'Belanja Mingguan (Indomaret)',
-    vendor: 'Indomaret Point Kemang',
-    amount: 284500,
-    category: 'Belanja',
-    accountName: 'E-Wallet',
-  },
-];
 
 type ScanState = 'camera' | 'scanning' | 'result';
 
@@ -101,28 +53,24 @@ export function ScanScreen() {
   // Camera hooks & state
   const cameraRef = useRef<any>(null);
   const [permission, requestPermission] = useCameraPermissions();
-  const [flashMode, setFlashMode] = useState<FlashMode>('off');
+  const [torchEnabled, setTorchEnabled] = useState(false);
 
   // UI state
   const [state, setState] = useState<ScanState>('camera');
   const [capturedUri, setCapturedUri] = useState<string | null>(null);
-  const [selectedReceipt, setSelectedReceipt] = useState<MockReceipt | null>(null);
-
-  // Auto-detection state & Target Lock simulation
-  const [autoScanEnabled, setAutoScanEnabled] = useState(true);
-  const [targetDetected, setTargetDetected] = useState(false);
-  const [detectCountdown, setDetectCountdown] = useState(3);
-  const autoScanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Modal bottom sheet state for preset receipts
-  const [presetModalVisible, setPresetModalVisible] = useState(false);
 
   // Result form state
   const [amount, setAmount] = useState('');
   const [vendor, setVendor] = useState('');
   const [category, setCategory] = useState('Makan & Harian');
   const [accountId, setAccountId] = useState('');
+  const [accountName, setAccountName] = useState('');
+  const [accountKind, setAccountKind] = useState<Account['kind']>('BANK');
   const [note, setNote] = useState('');
+  const [transactionType, setTransactionType] = useState<'INCOME' | 'EXPENSE'>('EXPENSE');
+  const [draftIntent, setDraftIntent] = useState<ParserResponse['intent']>('unknown');
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [categories, setCategories] = useState<ApiCategory[]>([]);
 
   // Dropdowns
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
@@ -136,113 +84,59 @@ export function ScanScreen() {
     message: '',
   });
 
-  // Reanimated values for laser motion scan & lock ring
-  const laserY = useSharedValue(0);
-  const laserOpacity = useSharedValue(0.4);
-  const lockScale = useSharedValue(0.9);
-
-  // Motion laser scan animation loop
-  useEffect(() => {
-    laserY.value = withRepeat(
-      withTiming(VIEWFINDER_HEIGHT - 30, {
-        duration: 1800,
-        easing: Easing.inOut(Easing.quad),
-      }),
-      -1,
-      true
-    );
-
-    laserOpacity.value = withRepeat(
-      withSequence(
-        withTiming(0.95, { duration: 900 }),
-        withTiming(0.4, { duration: 900 })
-      ),
-      -1,
-      true
-    );
-  }, []);
-
-  // Handle Auto-detection timer when camera is active
-  const handleBarcodeScanned = (scanningResult: any) => {
-    if (state === 'camera' && permission?.granted && autoScanEnabled && !targetDetected) {
-      setTargetDetected(true);
-      lockScale.value = withSequence(
-        withTiming(1.15, { duration: 200 }),
-        withTiming(1, { duration: 150 })
-      );
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-      // Auto trigger snap after target lock countdown
-      if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
-      autoScanTimerRef.current = setTimeout(() => {
-        handleSnapPhoto(scanningResult.data);
-      }, 1000);
-    }
+  const parseImage = async (imageBase64: string) => {
+    const { data } = await edgeApi.parseImage(imageBase64);
+    return data;
   };
 
+  const applyDraft = (data: ParserResponse, uri: string | null) => {
+    setCapturedUri(uri);
+    setDraftIntent(data.intent);
+    setTransactionType(data.intent === 'create_income' ? 'INCOME' : 'EXPENSE');
+    setAmount(String(data.fields.amount ?? data.fields.new_balance));
+    setAccountName(data.fields.account_name ?? '');
+    setAccountKind(data.fields.account_kind ?? 'BANK');
+    setVendor(data.fields.description ?? data.fields.debt_name ?? data.fields.goal_name ?? '');
+    setCategory(data.fields.category_name ?? categories.find(({ type }) => type === (data.intent === 'create_income' ? 'INCOME' : 'EXPENSE'))?.name ?? '');
+    const parsedAccount = accounts.find(({ id, name }) => id === data.fields.account_id || name.toLocaleLowerCase('id-ID') === data.fields.account_name?.toLocaleLowerCase('id-ID'));
+    setAccountId(parsedAccount?.id ?? accounts[0]?.id ?? '');
+    setNote('');
+    setState('result');
+    return true;
+  };
+
+  const [saving, setSaving] = useState(false);
+  const transactionKey = useRef<string | null>(null);
   useEffect(() => {
-    if (!autoScanEnabled || state !== 'camera') {
-      setTargetDetected(false);
-      if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
-    }
-    return () => {
-      if (autoScanTimerRef.current) clearTimeout(autoScanTimerRef.current);
-    };
-  }, [state, autoScanEnabled]);
-
-  const animatedLaserStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: laserY.value }],
-    opacity: laserOpacity.value,
-  }));
-
-  const animatedLockStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: lockScale.value }],
-  }));
-
-  // Accounts store
-  const accounts = financeStore.getAccounts();
-  useEffect(() => {
-    if (accounts.length > 0 && !accountId) {
-      setAccountId(accounts[0].id);
-    }
-  }, [accounts]);
+    Promise.all([edgeApi.accounts(), edgeApi.categories()]).then(([accountResponse, categoryResponse]) => {
+      setAccounts(accountResponse.data);
+      setCategories(categoryResponse.data);
+      setAccountId((current) => current || accountResponse.data[0]?.id || '');
+    }).catch((error) => Alert.alert(t('scan.loadAccountFailed'), error instanceof Error ? error.message : t('scan.loadAccountFailedFallback')));
+  }, []);
 
   // Flash toggle
   const toggleFlash = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setFlashMode((prev) => (prev === 'off' ? 'on' : 'off'));
-  };
-
-  // Toggle auto scan mode
-  const toggleAutoScan = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setAutoScanEnabled((prev) => !prev);
-    setTargetDetected(false);
+    setTorchEnabled((prev) => !prev);
   };
 
   // Capture photo via custom CameraView
-  const handleSnapPhoto = async (scannedData?: string) => {
+  const handleSnapPhoto = async () => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      setTargetDetected(false);
-
       if (cameraRef.current) {
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.85,
-          skipProcessing: true,
-        });
-
-        if (photo?.uri) {
+        const photo = await cameraRef.current.takePictureAsync({ quality: 0.5, base64: true });
+        if (photo?.uri && photo.base64) {
           setCapturedUri(photo.uri);
-          processScannedPhoto(photo.uri, scannedData ? `Deteksi Barcode AI` : 'Foto Kamera Live');
+          processScannedPhoto(photo.uri, photo.base64);
           return;
         }
       }
 
-      processScannedPhoto(null, 'Simulasi Struk Auto-Detect');
+      throw new Error(t('scan.cameraSnapFailed'));
     } catch (err: any) {
-      console.log('Camera snap note:', err?.message);
-      processScannedPhoto(null, 'Struk Terpindai');
+      Alert.alert(t('scan.cameraSnapErrorTitle'), err?.message || t('scan.cameraSnapFailed'));
     }
   };
 
@@ -252,107 +146,89 @@ export function ScanScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
-        Alert.alert('Izin Galeri', 'Aplikasi membutuhkan akses galeri.');
+        Alert.alert(t('scan.galleryPermissionTitle'), t('scan.galleryPermissionMessage'));
         return;
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
-        quality: 0.85,
+        quality: 0.5,
+        base64: true,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const uri = result.assets[0].uri;
         setCapturedUri(uri);
-        processScannedPhoto(uri, 'Foto dari Galeri');
+        if (!result.assets[0].base64) throw new Error(t('scan.extractFailedMessage'));
+        processScannedPhoto(uri, result.assets[0].base64);
       }
     } catch (err: any) {
-      Alert.alert('Error Galeri', err.message || 'Gagal membuka galeri.');
+      Alert.alert(t('scan.galleryErrorTitle'), err.message || t('scan.galleryErrorTitle'));
     }
   };
 
-  // Start AI extraction simulation flow
-  const processScannedPhoto = (uri: string | null, label: string) => {
-    const mock = MOCK_RECEIPTS[Math.floor(Math.random() * MOCK_RECEIPTS.length)];
-    setSelectedReceipt({
-      ...mock,
-      name: label,
-    });
+  const processScannedPhoto = async (uri: string | null, imageBase64: string) => {
+    if (!uri) return;
     setState('scanning');
-
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-    setTimeout(() => {
-      setAmount(mock.amount.toString());
-      setVendor(mock.vendor);
-      setCategory(mock.category);
-      setNote(`Pindai AI: ${label}`);
-
-      const matchedAcc = accounts.find(
-        (a) => a.name.toLowerCase() === mock.accountName.toLowerCase()
-      );
-      setAccountId(matchedAcc ? matchedAcc.id : accounts[0]?.id || '');
-
-      setState('result');
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    }, 2400);
-  };
-
-  // Quick simulate using presets from modal
-  const handleSimulatePreset = (mock: MockReceipt) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setPresetModalVisible(false);
-    setCapturedUri(null);
-    setSelectedReceipt(mock);
-    setState('scanning');
-
-    setTimeout(() => {
-      setAmount(mock.amount.toString());
-      setVendor(mock.vendor);
-      setCategory(mock.category);
-      setNote(`Pindai contoh: ${mock.vendor}`);
-
-      const matchedAcc = accounts.find(
-        (a) => a.name.toLowerCase() === mock.accountName.toLowerCase()
-      );
-      setAccountId(matchedAcc ? matchedAcc.id : accounts[0]?.id || '');
-
-      setState('result');
-    }, 2000);
-  };
-
-  // Save transaction to local store
-  const handleSaveTransaction = () => {
-    const parsedAmount = parseInt(amount.replace(/[^\d]/g, ''), 10);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      Alert.alert('Nominal Tidak Valid', 'Nominal pengeluaran harus lebih dari Rp 0.');
-      return;
-    }
-
-    if (!accountId) {
-      Alert.alert('Akun Belum Dipilih', 'Silakan pilih akun pembayaran.');
-      return;
-    }
-
     try {
-      financeStore.recordTransaction({
-        type: 'EXPENSE',
-        amount: parsedAmount,
-        accountId: accountId,
-        categoryName: category,
-        description: vendor.trim() || 'Struk Pemindaian AI',
-        note: note.trim(),
+      const data = await parseImage(imageBase64);
+      if (data.intent === 'unknown' || (data.fields.amount == null && data.fields.new_balance == null)) {
+        setState('camera');
+        setStatusModal({ visible: true, type: 'error', title: t('scan.extractFailedTitle'), message: t('scan.extractFailedMessage') });
+      } else applyDraft(data, uri);
+    } catch (cause) {
+      setState('camera');
+      setStatusModal({
+        visible: true,
+        type: 'error',
+        title: t('scan.extractFailedTitle'),
+        message: cause instanceof Error ? cause.message : t('scan.extractFailedMessage'),
       });
+    }
+  };
 
+  const handleSaveTransaction = async () => {
+    if (!['create_income', 'create_expense', 'create_account', 'set_balance'].includes(draftIntent)) {
+      setStatusModal({ visible: true, type: 'error', title: t('scan.unsupportedIntentTitle'), message: 'Jenis tindakan ini belum dapat disimpan.' });
+      return;
+    }
+    const parsedAmount = parseInt(amount.replace(/[^\d]/g, ''), 10);
+    if (isNaN(parsedAmount) || parsedAmount < 0 || (!['set_balance', 'create_account'].includes(draftIntent) && parsedAmount === 0)) {
+      Alert.alert(t('scan.invalidAmountTitle'), t('scan.invalidAmountMessage'));
+      return;
+    }
+
+    const selectedAccount = accounts.find(({ id }) => id === accountId);
+    if (draftIntent === 'create_account' ? !accountName.trim() : !selectedAccount) {
+      Alert.alert(t('scan.accountRequiredTitle'), t('scan.accountRequiredMessage'));
+      return;
+    }
+
+    setSaving(true);
+    try {
+      transactionKey.current ??= idempotencyKey(draftIntent === 'create_account' ? 'scan-account' : draftIntent === 'set_balance' ? 'scan-balance' : 'scan-transaction');
+      if (draftIntent === 'create_account') await edgeApi.createAccount({ name: accountName.trim(), kind: accountKind, opening_balance: parsedAmount }, transactionKey.current);
+      else if (draftIntent === 'set_balance') await edgeApi.setAccountBalance(selectedAccount!.id, parsedAmount, selectedAccount!.version, transactionKey.current);
+      else await edgeApi.createTransaction({
+        type: transactionType,
+        amount: parsedAmount,
+        account_id: accountId,
+        category_name: category,
+        description: vendor.trim() || t('scan.defaultDescription'),
+        note: note.trim(),
+        source: 'RECEIPT',
+      }, transactionKey.current);
       setStatusModal({
         visible: true,
         type: 'success',
-        title: 'Pengeluaran Dicatat!',
-        message: `Nominal Rp ${parsedAmount.toLocaleString('id-ID')} berhasil tersimpan.`,
+        title: draftIntent === 'create_account' ? 'Akun berhasil dibuat' : draftIntent === 'set_balance' ? 'Saldo berhasil diperbarui' : t('scan.saveSuccessTitle'),
+        message: draftIntent === 'create_account' ? `${accountName.trim()} dibuat dengan saldo Rp ${parsedAmount.toLocaleString('id-ID')}` : draftIntent === 'set_balance' ? `Saldo ${selectedAccount!.name} kini Rp ${parsedAmount.toLocaleString('id-ID')}` : `Rp ${parsedAmount.toLocaleString('id-ID')} — ${t('scan.saveSuccessMessage')}`,
       });
-    } catch (err: any) {
-      Alert.alert('Gagal Menyimpan', err.message || 'Terjadi kesalahan sistem.');
+    } catch (err) {
+      Alert.alert(t('scan.saveFailedTitle'), err instanceof Error ? err.message : t('scan.genericError'));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -368,47 +244,31 @@ export function ScanScreen() {
           <ArrowLeft color={theme.textPrimary} size={22} variant="Outline" />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.textPrimary }]} weight="bold">
-          Pindai Struk AI
+          {t('scan.headerTitle')}
         </Text>
 
         {/* Right Header Action Controls */}
-        {state === 'camera' && permission?.granted && (
-          <View style={styles.headerRightActions}>
-            {/* Auto Detect Toggle */}
-            <TouchableOpacity
-              activeOpacity={0.7}
-              style={[
-                styles.iconBtn,
-                {
-                  borderColor: autoScanEnabled ? theme.primary : theme.border,
-                  backgroundColor: autoScanEnabled ? theme.primary + '20' : theme.surface,
-                },
-              ]}
-              onPress={toggleAutoScan}
-            >
-              <Scan color={autoScanEnabled ? theme.primary : theme.textMuted} size={20} variant={autoScanEnabled ? 'Bold' : 'Outline'} />
-            </TouchableOpacity>
-
-            {/* Flash Mode Toggle */}
-            <TouchableOpacity
-              activeOpacity={0.7}
-              style={[
-                styles.iconBtn,
-                {
-                  borderColor: flashMode === 'on' ? theme.primary : theme.border,
-                  backgroundColor: flashMode === 'on' ? theme.primary + '20' : theme.surface,
-                },
-              ]}
-              onPress={toggleFlash}
-            >
-              {flashMode === 'on' ? (
-                <Flash color={theme.primary} size={20} variant="Bold" />
-              ) : (
-                <FlashSlash color={theme.textMuted} size={20} variant="Outline" />
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
+        <View style={styles.headerRightActions}>
+          {state === 'camera' && permission?.granted && (
+              <TouchableOpacity
+                activeOpacity={0.7}
+                style={[
+                  styles.iconBtn,
+                  {
+                    borderColor: torchEnabled ? theme.primary : theme.border,
+                    backgroundColor: torchEnabled ? theme.primary + '20' : theme.surface,
+                  },
+                ]}
+                onPress={toggleFlash}
+              >
+                {torchEnabled ? (
+                  <Flash color={theme.primary} size={20} variant="Bold" />
+                ) : (
+                  <FlashSlash color={theme.textMuted} size={20} variant="Outline" />
+                )}
+              </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       <KeyboardAwareScrollView
@@ -421,29 +281,25 @@ export function ScanScreen() {
         {state === 'camera' && (
           <Animated.View entering={FadeInDown.duration(300)} style={styles.stateContainer}>
             {/* Large Viewfinder Container */}
-            <View style={[styles.cameraFrame, { borderColor: targetDetected ? theme.primary : theme.border }]}>
+            <View style={[styles.cameraFrame, { borderColor: theme.border }]}>
               {permission?.granted ? (
                 <CameraView
                   ref={cameraRef}
                   facing="back"
-                  flash={flashMode}
+                  enableTorch={torchEnabled}
                   style={StyleSheet.absoluteFill}
-                  onBarcodeScanned={autoScanEnabled && !targetDetected ? handleBarcodeScanned : undefined}
-                  barcodeScannerSettings={{
-                    barcodeTypes: ["qr", "ean13", "ean8", "pdf417", "code128", "code39"],
-                  }}
                 />
               ) : (
                 <View style={[styles.permissionBox, { backgroundColor: theme.surface }]}>
                   <CameraIcon color={theme.primary} size={48} variant="Bulk" />
                   <Text style={[styles.permTitle, { color: theme.textPrimary }]} weight="bold">
-                    Izin Kamera Diperlukan
+                    {t('scan.cameraPermTitle')}
                   </Text>
                   <Text style={[styles.permSub, { color: theme.textMuted }]}>
-                    Aktifkan kamera untuk pemindaian struk otomatis berbasis AI
+                    {t('scan.cameraPermSub')}
                   </Text>
                   <Button
-                    title="Izinkan Akses Kamera"
+                    title={t('scan.cameraPermBtn')}
                     variant="lime"
                     size="medium"
                     onPress={requestPermission}
@@ -452,44 +308,11 @@ export function ScanScreen() {
                 </View>
               )}
 
-              {/* Custom Corner Framing Overlay */}
               <View style={styles.cornerOverlay}>
-                <View style={[styles.corner, styles.topLeft, { borderColor: targetDetected ? '#22C55E' : theme.primary }]} />
-                <View style={[styles.corner, styles.topRight, { borderColor: targetDetected ? '#22C55E' : theme.primary }]} />
-                <View style={[styles.corner, styles.bottomLeft, { borderColor: targetDetected ? '#22C55E' : theme.primary }]} />
-                <View style={[styles.corner, styles.bottomRight, { borderColor: targetDetected ? '#22C55E' : theme.primary }]} />
-              </View>
-
-              {/* Futuristic Motion Scan Laser Beam */}
-              {permission?.granted && (
-                <Animated.View
-                  style={[
-                    styles.motionLaserBeam,
-                    { backgroundColor: targetDetected ? '#22C55E' : theme.primary },
-                    animatedLaserStyle,
-                  ]}
-                />
-              )}
-
-              {/* Auto Target Lock Visual Indicator */}
-              {targetDetected && (
-                <Animated.View style={[styles.targetLockBox, animatedLockStyle]}>
-                  <View style={styles.targetLockInner}>
-                    <TickCircle color="#22C55E" size={32} variant="Bold" />
-                    <Text style={styles.targetLockText} weight="bold">
-                      STRUK TERDETEKSI!
-                    </Text>
-                    <Text style={styles.targetLockSub}>Mengambil foto otomatis...</Text>
-                  </View>
-                </Animated.View>
-              )}
-
-              {/* Live AI HUD Badge */}
-              <View style={styles.hudBadge}>
-                <View style={[styles.hudDot, { backgroundColor: autoScanEnabled ? '#22C55E' : theme.primary }]} />
-                <Text style={styles.hudText} weight="medium">
-                  {autoScanEnabled ? 'AUTO DETECT ACTIVE' : 'MANUAL SCAN MODE'}
-                </Text>
+                <View style={[styles.corner, styles.topLeft, { borderColor: theme.primary }]} />
+                <View style={[styles.corner, styles.topRight, { borderColor: theme.primary }]} />
+                <View style={[styles.corner, styles.bottomLeft, { borderColor: theme.primary }]} />
+                <View style={[styles.corner, styles.bottomRight, { borderColor: theme.primary }]} />
               </View>
             </View>
 
@@ -502,35 +325,21 @@ export function ScanScreen() {
                 onPress={handlePickGallery}
               >
                 <Gallery color={theme.textPrimary} size={24} variant="Outline" />
-                <Text style={[styles.controlLabel, { color: theme.textMuted }]}>Galeri</Text>
+                <Text style={[styles.controlLabel, { color: theme.textMuted }]}>{t('scan.galleryLabel')}</Text>
               </TouchableOpacity>
 
               {/* Main Shutter Button */}
               <TouchableOpacity
                 activeOpacity={0.85}
-                style={[
-                  styles.shutterOuterRing,
-                  { borderColor: targetDetected ? '#22C55E' : theme.primary },
-                ]}
-                onPress={() => handleSnapPhoto()}
-              >
-                <View style={[styles.shutterInnerBtn, { backgroundColor: targetDetected ? '#22C55E' : theme.primary }]}>
+                 style={[styles.shutterOuterRing, { borderColor: theme.primary }]}
+                 onPress={handleSnapPhoto}
+               >
+                 <View style={[styles.shutterInnerBtn, { backgroundColor: theme.primary }]}>
                   <CameraIcon color="#0F3D3E" size={28} variant="Bold" />
                 </View>
               </TouchableOpacity>
 
-              {/* Open Presets Modal Button */}
-              <TouchableOpacity
-                activeOpacity={0.8}
-                style={[styles.sideControlBtn, { backgroundColor: theme.surface, borderColor: theme.border }]}
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setPresetModalVisible(true);
-                }}
-              >
-                <Magicpen color={theme.primary} size={24} variant="Bold" />
-                <Text style={[styles.controlLabel, { color: theme.textMuted }]}>Contoh</Text>
-              </TouchableOpacity>
+              <View style={styles.sideControlBtn} />
             </View>
           </Animated.View>
         )}
@@ -547,15 +356,6 @@ export function ScanScreen() {
                 </View>
               )}
 
-              {/* Fast Laser Overlay */}
-              <Animated.View
-                style={[
-                  styles.motionLaserBeam,
-                  { backgroundColor: theme.primary },
-                  animatedLaserStyle,
-                ]}
-              />
-
               <View style={styles.scanningOverlay}>
                 <ActivityIndicator color="#FFFFFF" size="large" />
               </View>
@@ -563,10 +363,10 @@ export function ScanScreen() {
 
             <View style={styles.scanStatusTextWrapper}>
               <Text style={[styles.scanStatusTitle, { color: theme.textPrimary }]} weight="bold">
-                Mengekstrak Data Struk...
+                {t('scan.scanningTitle')}
               </Text>
               <Text style={[styles.scanStatusSub, { color: theme.textMuted }]}>
-                Teknologi AI sedang membaca nominal, tanggal, dan nama toko
+                {t('scan.scanningSub')}
               </Text>
             </View>
           </Animated.View>
@@ -582,7 +382,7 @@ export function ScanScreen() {
                 <View style={[styles.bannerBadge, { backgroundColor: theme.primary }]}>
                   <ImageIcon color="#0F3D3E" size={14} />
                   <Text style={styles.bannerBadgeText} weight="bold">
-                    Foto Terlampir
+                    {t('scan.photoBadge')}
                   </Text>
                 </View>
               </View>
@@ -590,19 +390,20 @@ export function ScanScreen() {
 
             <View style={styles.resultHeaderRow}>
               <Text style={[styles.sectionTitle, { color: theme.textSecondary }]} weight="semibold">
-                Hasil Pemindaian AI
+                {t('scan.resultTitle')}
               </Text>
               <TouchableOpacity
                 activeOpacity={0.7}
                 style={styles.retakeInlineBtn}
                 onPress={() => {
+                  transactionKey.current = null;
                   setState('camera');
                   setCapturedUri(null);
                 }}
               >
                 <Refresh color={theme.primary} size={16} />
                 <Text style={[styles.retakeText, { color: theme.primary }]} weight="medium">
-                  Foto Ulang
+                  {t('scan.retakeBtn')}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -612,23 +413,29 @@ export function ScanScreen() {
                 {/* Nominal Input */}
                 <Input
                   keyboardType="numeric"
-                  label="Nominal Transaksi (Rp)"
+                  label={draftIntent === 'create_account' ? 'Saldo awal' : draftIntent === 'set_balance' ? 'Saldo baru' : t('scan.amountLabel')}
                   leftIcon={<DollarCircle color={theme.textMuted} size={20} variant="Outline" />}
                   value={amount}
                   onChangeText={(val) => setAmount(val.replace(/[^\d]/g, ''))}
                 />
 
-                {/* Vendor / Toko */}
-                <Input
-                  label="Toko / Merchant"
+                {draftIntent === 'create_account' && <>
+                  <Input label="Nama akun" leftIcon={<CardIcon color={theme.textMuted} size={20} variant="Outline" />} value={accountName} onChangeText={setAccountName} />
+                  <View style={styles.dropdownSection}>
+                    <Text style={[styles.fieldLabel, { color: theme.textPrimary }]}>Jenis akun</Text>
+                    <View style={styles.actionRow}>{(['CASH', 'BANK', 'E_WALLET'] as const).map((kind) => <Button key={kind} title={kind} variant={accountKind === kind ? 'lime' : 'outline'} size="small" style={styles.flexBtn} onPress={() => setAccountKind(kind)} />)}</View>
+                  </View>
+                </>}
+
+                {!['set_balance', 'create_account'].includes(draftIntent) && <Input
+                  label={transactionType === 'INCOME' ? 'Sumber pemasukan' : t('scan.merchantLabel')}
                   leftIcon={<DocumentText color={theme.textMuted} size={20} variant="Outline" />}
                   value={vendor}
                   onChangeText={setVendor}
-                />
+                />}
 
-                {/* Kategori Dropdown */}
-                <View style={styles.dropdownSection}>
-                  <Text style={[styles.fieldLabel, { color: theme.textPrimary }]}>Kategori</Text>
+                {!['set_balance', 'create_account'].includes(draftIntent) && <View style={styles.dropdownSection}>
+                  <Text style={[styles.fieldLabel, { color: theme.textPrimary }]}>{t('scan.categoryLabel')}</Text>
                   <TouchableOpacity
                     activeOpacity={0.7}
                     style={[styles.dropdownBtn, { backgroundColor: theme.surfaceElement, borderColor: theme.border }]}
@@ -644,34 +451,26 @@ export function ScanScreen() {
 
                   {showCategoryPicker && (
                     <Card variant="outline" style={styles.dropdownList}>
-                      {[
-                        'Makan & Harian',
-                        'Transportasi',
-                        'Belanja',
-                        'Hiburan',
-                        'Tagihan',
-                        'Kesehatan',
-                        'Lainnya',
-                      ].map((item) => (
+                      {categories.filter(({ type }) => type === transactionType).map((item) => (
                         <TouchableOpacity
-                          key={item}
+                          key={item.id}
                           activeOpacity={0.7}
                           style={styles.dropdownOption}
                           onPress={() => {
-                            setCategory(item);
+                            setCategory(item.name);
                             setShowCategoryPicker(false);
                           }}
                         >
-                          <Text style={{ color: theme.textPrimary }}>{item}</Text>
+                          <Text style={{ color: theme.textPrimary }}>{item.name}</Text>
                         </TouchableOpacity>
                       ))}
                     </Card>
                   )}
-                </View>
+                </View>}
 
                 {/* Akun Pembayaran Dropdown */}
-                <View style={styles.dropdownSection}>
-                  <Text style={[styles.fieldLabel, { color: theme.textPrimary }]}>Sumber Pembayaran</Text>
+                {draftIntent !== 'create_account' && <View style={styles.dropdownSection}>
+                  <Text style={[styles.fieldLabel, { color: theme.textPrimary }]}>{draftIntent === 'set_balance' ? 'Akun' : t('scan.paymentSourceLabel')}</Text>
                   <TouchableOpacity
                     activeOpacity={0.7}
                     style={[styles.dropdownBtn, { backgroundColor: theme.surfaceElement, borderColor: theme.border }]}
@@ -680,7 +479,7 @@ export function ScanScreen() {
                     <View style={styles.dropdownLeft}>
                       <CardIcon color={theme.textMuted} size={20} variant="Outline" />
                       <Text style={{ color: theme.textPrimary }} weight="medium">
-                        {accounts.find((a) => a.id === accountId)?.name || 'Pilih Akun'}
+                        {accounts.find((a) => a.id === accountId)?.name || t('scan.selectAccount')}
                       </Text>
                     </View>
                   </TouchableOpacity>
@@ -702,33 +501,34 @@ export function ScanScreen() {
                       ))}
                     </Card>
                   )}
-                </View>
+                </View>}
 
-                {/* Catatan Input */}
-                <Input
-                  label="Catatan Opsional"
+                {!['set_balance', 'create_account'].includes(draftIntent) && <Input
+                  label={t('scan.noteLabel')}
                   leftIcon={<Calendar color={theme.textMuted} size={20} variant="Outline" />}
                   value={note}
                   onChangeText={setNote}
-                />
+                />}
               </View>
             </Card>
 
             {/* Bottom Actions */}
             <View style={styles.actionRow}>
               <Button
-                title="Simpan Transaksi"
+                 title={saving ? t('scan.savingBtn') : draftIntent === 'create_account' ? 'Buat akun' : draftIntent === 'set_balance' ? 'Perbarui saldo' : transactionType === 'INCOME' ? 'Simpan pemasukan' : 'Simpan pengeluaran'}
+                disabled={saving}
                 variant="lime"
                 size="large"
                 style={styles.flexBtn}
                 onPress={handleSaveTransaction}
               />
               <Button
-                title="Pindai Ulang"
+                title={t('scan.rescanBtn')}
                 variant="outline"
                 size="large"
                 style={styles.flexBtn}
                 onPress={() => {
+                  transactionKey.current = null;
                   setState('camera');
                   setCapturedUri(null);
                 }}
@@ -738,60 +538,6 @@ export function ScanScreen() {
         )}
       </KeyboardAwareScrollView>
 
-      {/* COMPACT BOTTOM SHEET MODAL FOR PRESET SIMULATION */}
-      <Modal
-        visible={presetModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setPresetModalVisible(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setPresetModalVisible(false)}>
-          <Pressable
-            style={[styles.bottomSheetContainer, { backgroundColor: theme.surface }]}
-            onPress={(e) => e.stopPropagation()}
-          >
-            {/* Sheet Handle */}
-            <View style={[styles.sheetHandle, { backgroundColor: theme.border }]} />
-
-            <View style={styles.sheetHeader}>
-              <View style={{ gap: 2 }}>
-                <Text style={[styles.sheetTitle, { color: theme.textPrimary }]} weight="bold">
-                  Simulasi Struk Contoh
-                </Text>
-                <Text style={[styles.sheetSub, { color: theme.textMuted }]}>
-                  Pilih struk contoh untuk menguji ekstraksi AI cepat
-                </Text>
-              </View>
-              <TouchableOpacity onPress={() => setPresetModalVisible(false)}>
-                <CloseCircle color={theme.textMuted} size={24} variant="Outline" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.sheetList}>
-              {MOCK_RECEIPTS.map((receipt, idx) => (
-                <TouchableOpacity
-                  key={idx}
-                  activeOpacity={0.8}
-                  style={[styles.sheetItemCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}
-                  onPress={() => handleSimulatePreset(receipt)}
-                >
-                  <View style={[styles.sheetItemIcon, { backgroundColor: theme.surfaceElement }]}>
-                    <Receipt2 color={theme.primary} size={24} variant="Outline" />
-                  </View>
-                  <View style={styles.sheetItemInfo}>
-                    <Text style={[styles.sheetItemTitle, { color: theme.textPrimary }]} weight="medium">
-                      {receipt.name}
-                    </Text>
-                    <Text style={[styles.sheetItemMeta, { color: theme.textMuted }]}>
-                      Rp {receipt.amount.toLocaleString('id-ID')} • {receipt.category}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
 
       {/* Success Modal */}
       <StatusModal
@@ -799,12 +545,14 @@ export function ScanScreen() {
         type={statusModal.type}
         title={statusModal.title}
         message={statusModal.message}
-        buttonText="Selesai"
+        buttonText={statusModal.type === 'success' ? t('scan.btnDone') : t('scan.btnTryAgain')}
         onConfirm={() => {
           setStatusModal((prev) => ({ ...prev, visible: false }));
-          router.back();
+          if (statusModal.type === 'success') router.back();
         }}
+        onClose={() => setStatusModal((prev) => ({ ...prev, visible: false }))}
       />
+
     </ScreenWrapper>
   );
 }
@@ -913,69 +661,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 0,
     borderBottomRightRadius: 12,
   },
-  motionLaserBeam: {
-    position: 'absolute',
-    left: 14,
-    right: 14,
-    height: 3.5,
-    borderRadius: 2,
-    shadowColor: '#B7E36D',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 14,
-    elevation: 10,
-    zIndex: 15,
-  },
-  targetLockBox: {
-    position: 'absolute',
-    top: '30%',
-    left: '15%',
-    right: '15%',
-    backgroundColor: 'rgba(7, 31, 32, 0.88)',
-    borderRadius: 20,
-    padding: 16,
-    borderWidth: 2,
-    borderColor: '#22C55E',
-    alignItems: 'center',
-    zIndex: 25,
-  },
-  targetLockInner: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  targetLockText: {
-    color: '#22C55E',
-    fontSize: 13,
-    letterSpacing: 1,
-    marginTop: 4,
-  },
-  targetLockSub: {
-    color: '#FAFCFB',
-    fontSize: 11,
-  },
-  hudBadge: {
-    position: 'absolute',
-    top: 16,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(7, 31, 32, 0.8)',
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 100,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    zIndex: 20,
-  },
-  hudDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  hudText: {
-    color: '#FAFCFB',
-    fontSize: 10,
-    letterSpacing: 1,
-  },
   controlsRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -986,7 +671,6 @@ const styles = StyleSheet.create({
     width: 68,
     height: 68,
     borderRadius: 34,
-    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 2,
@@ -1192,6 +876,4 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
 });
-
-
 

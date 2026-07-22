@@ -63,8 +63,8 @@ export function StatusModal({
   if (!visible) return null;
 
   const isSuccess = type === 'success';
-  const iconColor = isSuccess ? '#22C55E' : '#FF6B6B';
-  const badgeBg = isSuccess ? 'rgba(34, 197, 94, 0.12)' : 'rgba(255, 107, 107, 0.12)';
+  const iconColor = isSuccess ? theme.income : theme.expense;
+  const badgeBg = isSuccess ? theme.incomeSurface : theme.expenseSurface;
 
   return (
     <Modal transparent visible={visible} animationType="none" onRequestClose={onClose}>

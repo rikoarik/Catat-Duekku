@@ -8,9 +8,11 @@
     "scheme": "catatduekku",
     "userInterfaceStyle": "light",
     "ios": {
-      "icon": "./assets/images/Logo-Catat.png"
+      "icon": "./assets/images/Logo-Catat.png",
+      "bundleIdentifier": "com.catatduekku.app"
     },
     "android": {
+      "package": "com.catatduekku.app",
       "adaptiveIcon": {
         "backgroundColor": "#FAFCFB",
         "foregroundImage": "./assets/images/Logo-Catat.png"
@@ -32,11 +34,25 @@
         }
       ],
       "expo-font",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-notifications",
+        {
+          "color": "#0F3D3E",
+          "defaultChannel": "keuangan"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e5bd57d2-8561-47e0-af5e-e1b31d7ecf4f"
+      }
+    },
+    "owner": "prast53"
   }
 }

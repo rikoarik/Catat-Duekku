@@ -1,0 +1,866 @@
+openapi: 3.1.0
+info:
+  title: Catat Duekku API
+  version: 1.0.0
+  description: Supabase Edge Function REST router for the active Expo UI. Supabase Auth flows and device PIN/biometrics are outside this API. Receipt extraction is blocked.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Profile
+  - name: Data
+  - name: Accounts
+  - name: Categories
+  - name: Budgets
+  - name: Saving goals
+  - name: Debts
+  - name: Transactions
+  - name: Aggregates
+  - name: Parser
+  - name: Receipts
+paths:
+  /me/profile:
+    get:
+      tags: [Profile]
+      operationId: getProfile
+      summary: Get the authenticated user's profile
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfileResponse' }
+              example:
+                data: { id: 8b95fe72-a5cb-4bd2-a7bd-23c80da704c0, email: ayu@example.com, full_name: Ayu Lestari, timezone: Asia/Jakarta, theme_mode: system, cloud_sync_enabled: true, version: 1, created_at: '2026-07-01T08:00:00Z', updated_at: '2026-07-22T09:00:00Z' }
+                meta: { request_id: 01J2XK6YSPB3MZ0K2C2RCB7H4F }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    patch:
+      tags: [Profile]
+      operationId: updateProfile
+      summary: Update profile fields owned by the REST API
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProfilePatch' }
+            example: { full_name: Ayu Lestari }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfileResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '412': { $ref: '#/components/responses/VersionConflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /sync:
+    post:
+      tags: [Data]
+      operationId: synchronizeData
+      summary: Reconcile caller defaults and return the server revision
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Synchronized
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncResponse' }
+              example: { data: { status: synchronized, server_time: '2026-07-22T09:15:00Z', revision: '2026-07-22T09:15:00.123456Z' }, meta: { request_id: 01J2XK6YSPB3MZ0K2C2RCB7H4F } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /me/data:
+    delete:
+      tags: [Data]
+      operationId: resetMyData
+      summary: Reset caller-owned finance data while retaining auth identity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetRequest' }
+            example: { confirmation: RESET }
+      responses:
+        '200':
+          description: Reset completed atomically
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResetResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /accounts:
+    get:
+      tags: [Accounts]
+      operationId: listAccounts
+      summary: List all active caller-owned accounts
+      responses:
+        '200':
+          description: Unpaginated account list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    post:
+      tags: [Accounts]
+      operationId: createAccount
+      summary: Create an account
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountCreate' }
+            example: { name: Bank BCA, kind: BANK, opening_balance: 0, is_default: false }
+      responses:
+        '201':
+          description: Account created
+          headers:
+            Location: { schema: { type: string }, description: Resource path }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /categories:
+    get:
+      tags: [Categories]
+      operationId: listCategories
+      summary: List all active caller-owned categories
+      responses:
+        '200':
+          description: Unpaginated category list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CategoryListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    post:
+      tags: [Categories]
+      operationId: createCategory
+      summary: Create a category
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryCreate' }
+            example: { name: Kesehatan, type: EXPENSE, icon: health, color: '#22C55E' }
+      responses:
+        '201':
+          description: Category created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CategoryResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /budgets/current:
+    get:
+      tags: [Budgets]
+      operationId: getCurrentMonthlyBudget
+      summary: Get current profile-local calendar-month budget
+      responses:
+        '200':
+          description: Budget; data is null when no current budget exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NullableBudgetResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    put:
+      tags: [Budgets]
+      operationId: upsertCurrentMonthlyBudget
+      summary: Upsert the current profile-local calendar-month limit
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BudgetUpsert' }
+            example: { total_limit: 5000000 }
+      responses:
+        '200':
+          description: Upserted budget
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BudgetResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '412': { $ref: '#/components/responses/VersionConflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /saving-goals:
+    get:
+      tags: [Saving goals]
+      operationId: listSavingGoals
+      summary: List caller-owned saving goals
+      responses:
+        '200':
+          description: Unpaginated saving-goal list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavingGoalListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    post:
+      tags: [Saving goals]
+      operationId: createSavingGoal
+      summary: Create a saving goal
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SavingGoalCreate' }
+            example: { name: Beli Laptop Baru, target_amount: 15000000, target_date: '2026-12-31' }
+      responses:
+        '201':
+          description: Saving goal created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavingGoalResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /debts:
+    get:
+      tags: [Debts]
+      operationId: listDebts
+      summary: List caller-owned debts
+      responses:
+        '200':
+          description: Unpaginated debt list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DebtListResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    post:
+      tags: [Debts]
+      operationId: createDebt
+      summary: Create a debt and installment plan
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DebtCreate' }
+            example: { name: Cicilan Motor, total_amount: 12000000, tenor_months: 12, paid_installments: 2, start_date: '2026-07-01' }
+      responses:
+        '201':
+          description: Debt created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DebtResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /transactions:
+    post:
+      tags: [Transactions]
+      operationId: createTransaction
+      summary: Persist a user-confirmed income or expense atomically
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransactionCreate' }
+            example: { type: EXPENSE, amount: 45000, account_id: 0c177a15-b185-4714-95a1-b1bb43414db3, category_name: Makan '&' Harian, description: Warung Nasi Bu Edi, source: RECEIPT }
+      responses:
+        '201':
+          description: Transaction and account balance committed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransactionResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /summary:
+    get:
+      tags: [Aggregates]
+      operationId: getSummary
+      summary: Get dashboard financial summary
+      responses:
+        '200':
+          description: Caller-owned current-month summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SummaryResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /analytics/overview:
+    get:
+      tags: [Aggregates]
+      operationId: getAnalyticsOverview
+      summary: Get the active analytics screen aggregate
+      parameters:
+        - name: period
+          in: query
+          required: false
+          schema: { type: string, enum: [7m], default: 7m }
+          description: The only supported analytics filter
+      responses:
+        '200':
+          description: Seven-month overview ending in the current month
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyticsResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /parser:
+    post:
+      tags: [Parser]
+      operationId: parseFinancialInput
+      summary: Parse active natural-language input into a non-persistent preview
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ParserRequest' }
+            example: { input: makan siang 25 ribu pakai bank }
+      responses:
+        '200':
+          description: Parsed preview; never persisted automatically
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ParserResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '502': { $ref: '#/components/responses/UpstreamFailure' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /receipts/extractions:
+    post:
+      tags: [Receipts]
+      operationId: createReceiptExtraction
+      summary: Receipt extraction contract (BLOCKED)
+      description: Always returns RECEIPT_EXTRACTION_BLOCKED until provider, private storage, upload security, retention, and async retrieval are configured. Image bytes must not be accepted while blocked.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        description: Reserved activated contract; currently no body is accepted or processed.
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [image]
+              properties:
+                image: { type: string, format: binary, description: Reserved JPEG/PNG/HEIC, maximum 10 MiB after activation }
+      responses:
+        '503':
+          description: Capability is blocked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: { code: RECEIPT_EXTRACTION_BLOCKED, message: Receipt extraction is unavailable until a provider and private storage are configured., details: [] }
+                meta: { request_id: 01J2XK6YSPB3MZ0K2C2RCB7H4F }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Supabase access JWT; identity is JWT sub.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[ -~]+$' }
+      description: Recommended for POST; scoped to caller and route and retained at least 24 hours.
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      schema: { type: string, pattern: '^"[0-9]+"$' }
+      description: Quoted integer version; value "0" on budget means create-only.
+  responses:
+    BadRequest:
+      description: Malformed JSON or request
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Unauthorized:
+      description: Missing or invalid Supabase JWT
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    NotFound:
+      description: Resource absent, deleted, or foreign-owned
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Conflict:
+      description: Resource or idempotency conflict
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    VersionConflict:
+      description: If-Match precondition failed
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { error: { code: VALIDATION_FAILED, message: Request validation failed., details: [{ field: amount, reason: must be greater than 0 }] }, meta: { request_id: 01J2XK6YSPB3MZ0K2C2RCB7H4F } }
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After: { schema: { type: integer, minimum: 1 }, description: Seconds before retry }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    UpstreamFailure:
+      description: Configured upstream failed with no valid fallback
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Unavailable:
+      description: Service temporarily unavailable or capability blocked
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+  schemas:
+    Meta:
+      type: object
+      additionalProperties: false
+      required: [request_id]
+      properties:
+        request_id: { type: string, minLength: 1, maxLength: 128 }
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [field, reason]
+      properties:
+        field: { type: string }
+        reason: { type: string }
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, details]
+      properties:
+        code: { type: string, pattern: '^[A-Z][A-Z0-9_]*$' }
+        message: { type: string }
+        details: { type: array, items: { $ref: '#/components/schemas/ErrorDetail' } }
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error, meta]
+      properties:
+        error: { $ref: '#/components/schemas/Error' }
+        meta: { $ref: '#/components/schemas/Meta' }
+    Id: { type: string, format: uuid }
+    Money: { type: integer, format: int64, minimum: 0, maximum: 9000000000000000 }
+    PositiveMoney: { type: integer, format: int64, minimum: 1, maximum: 9000000000000000 }
+    Timestamp: { type: string, format: date-time }
+    ResourceBase:
+      type: object
+      required: [id, version, created_at, updated_at]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        version: { type: integer, minimum: 1 }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+    Profile:
+      allOf:
+        - $ref: '#/components/schemas/ResourceBase'
+        - type: object
+          additionalProperties: false
+          required: [email, full_name, timezone, theme_mode, cloud_sync_enabled]
+          properties:
+            email: { type: string, format: email }
+            full_name: { type: string, minLength: 1, maxLength: 100 }
+            timezone: { type: string, minLength: 1, maxLength: 64 }
+            theme_mode: { type: string, enum: [system, light, dark] }
+            cloud_sync_enabled: { type: boolean }
+    ProfilePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        full_name: { type: string, minLength: 1, maxLength: 100 }
+        timezone: { type: string, minLength: 1, maxLength: 64 }
+        theme_mode: { type: string, enum: [system, light, dark] }
+        cloud_sync_enabled: { type: boolean }
+    Account:
+      allOf:
+        - $ref: '#/components/schemas/ResourceBase'
+        - type: object
+          additionalProperties: false
+          required: [name, kind, balance, is_default, account_number, icon]
+          properties:
+            name: { type: string, minLength: 1, maxLength: 100 }
+            kind: { type: string, enum: [CASH, BANK, E_WALLET] }
+            balance: { type: integer, format: int64, minimum: -9000000000000000, maximum: 9000000000000000 }
+            is_default: { type: boolean }
+            account_number: { type: [string, 'null'], maxLength: 64 }
+            icon: { type: [string, 'null'], maxLength: 64 }
+    AccountCreate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        kind: { type: string, enum: [CASH, BANK, E_WALLET], default: BANK }
+        opening_balance: { $ref: '#/components/schemas/Money' }
+        is_default: { type: boolean, default: false }
+        account_number: { type: [string, 'null'], maxLength: 64 }
+        icon: { type: [string, 'null'], maxLength: 64 }
+    Category:
+      allOf:
+        - $ref: '#/components/schemas/ResourceBase'
+        - type: object
+          additionalProperties: false
+          required: [name, type, icon, color]
+          properties:
+            name: { type: string, minLength: 1, maxLength: 100 }
+            type: { type: string, enum: [INCOME, EXPENSE] }
+            icon: { type: [string, 'null'], maxLength: 64 }
+            color: { type: [string, 'null'], pattern: '^#[0-9A-Fa-f]{6}$' }
+    CategoryCreate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        type: { type: string, enum: [INCOME, EXPENSE], default: EXPENSE }
+        icon: { type: [string, 'null'], maxLength: 64 }
+        color: { type: [string, 'null'], pattern: '^#[0-9A-Fa-f]{6}$' }
+    MonthlyBudget:
+      allOf:
+        - $ref: '#/components/schemas/ResourceBase'
+        - type: object
+          additionalProperties: false
+          required: [month, total_limit, used_amount, remaining_amount, percent_used, day_of_month, days_in_month, days_left]
+          properties:
+            month: { type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$' }
+            total_limit: { $ref: '#/components/schemas/PositiveMoney' }
+            used_amount: { $ref: '#/components/schemas/Money' }
+            remaining_amount: { $ref: '#/components/schemas/Money' }
+            percent_used: { type: number, minimum: 0 }
+            day_of_month: { type: integer, minimum: 1, maximum: 31 }
+            days_in_month: { type: integer, minimum: 28, maximum: 31 }
+            days_left: { type: integer, minimum: 0, maximum: 30 }
+    BudgetUpsert:
+      type: object
+      additionalProperties: false
+      required: [total_limit]
+      properties:
+        total_limit: { $ref: '#/components/schemas/PositiveMoney' }
+    SavingGoal:
+      allOf:
+        - $ref: '#/components/schemas/ResourceBase'
+        - type: object
+          additionalProperties: false
+          required: [name, target_amount, target_date, saved_amount, remaining_amount, progress_percent, monthly_needed, status]
+          properties:
+            name: { type: string, minLength: 1, maxLength: 100 }
+            target_amount: { $ref: '#/components/schemas/PositiveMoney' }
+            target_date: { type: [string, 'null'], format: date }
+            saved_amount: { $ref: '#/components/schemas/Money' }
+            remaining_amount: { $ref: '#/components/schemas/Money' }
+            progress_percent: { type: number, minimum: 0 }
+            monthly_needed: { type: [integer, 'null'], format: int64, minimum: 0 }
+            status: { type: string, enum: [active, due_soon, overdue, achieved] }
+    SavingGoalCreate:
+      type: object
+      additionalProperties: false
+      required: [name, target_amount]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        target_amount: { $ref: '#/components/schemas/PositiveMoney' }
+        target_date: { type: [string, 'null'], format: date }
+    InstallmentPlan:
+      type: object
+      additionalProperties: false
+      required: [tenor_months, monthly_amount, start_date, paid_installments, months_left, projected_payoff_date, next_due_date]
+      properties:
+        tenor_months: { type: integer, minimum: 1, maximum: 600 }
+        monthly_amount: { $ref: '#/components/schemas/PositiveMoney' }
+        start_date: { type: string, format: date }
+        paid_installments: { type: integer, minimum: 0 }
+        months_left: { type: integer, minimum: 0 }
+        projected_payoff_date: { type: string, format: date }
+        next_due_date: { type: [string, 'null'], format: date }
+    Debt:
+      allOf:
+        - $ref: '#/components/schemas/ResourceBase'
+        - type: object
+          additionalProperties: false
+          required: [name, total_amount, paid_amount, remaining_amount, progress_percent, due_date, status, installment_plan]
+          properties:
+            name: { type: string, minLength: 1, maxLength: 100 }
+            total_amount: { $ref: '#/components/schemas/PositiveMoney' }
+            paid_amount: { $ref: '#/components/schemas/Money' }
+            remaining_amount: { $ref: '#/components/schemas/Money' }
+            progress_percent: { type: number, minimum: 0, maximum: 100 }
+            due_date: { type: [string, 'null'], format: date }
+            status: { type: string, enum: [active, paid] }
+            installment_plan: { $ref: '#/components/schemas/InstallmentPlan' }
+    DebtCreate:
+      type: object
+      additionalProperties: false
+      required: [name, total_amount, tenor_months, start_date]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        total_amount: { $ref: '#/components/schemas/PositiveMoney' }
+        tenor_months: { type: integer, minimum: 1, maximum: 600 }
+        paid_installments: { type: integer, minimum: 0, default: 0 }
+        start_date: { type: string, format: date }
+    Transaction:
+      allOf:
+        - $ref: '#/components/schemas/ResourceBase'
+        - type: object
+          additionalProperties: false
+          required: [type, amount, account_id, category_id, category_name, description, note, occurred_at, source, resulting_balance]
+          properties:
+            type: { type: string, enum: [INCOME, EXPENSE] }
+            amount: { type: integer, format: int64, minimum: -9000000000000000, maximum: 9000000000000000 }
+            account_id: { $ref: '#/components/schemas/Id' }
+            category_id: { type: [string, 'null'], format: uuid }
+            category_name: { type: [string, 'null'], maxLength: 100 }
+            description: { type: [string, 'null'], maxLength: 500 }
+            note: { type: [string, 'null'], maxLength: 500 }
+            occurred_at: { $ref: '#/components/schemas/Timestamp' }
+            source: { type: string, enum: [MANUAL, PARSER, RECEIPT] }
+            resulting_balance: { type: integer, format: int64 }
+    TransactionCreate:
+      type: object
+      additionalProperties: false
+      required: [type, amount, account_id]
+      properties:
+        type: { type: string, enum: [INCOME, EXPENSE] }
+        amount: { $ref: '#/components/schemas/PositiveMoney' }
+        account_id: { $ref: '#/components/schemas/Id' }
+        category_id: { type: [string, 'null'], format: uuid }
+        category_name: { type: [string, 'null'], maxLength: 100 }
+        description: { type: [string, 'null'], maxLength: 500 }
+        note: { type: [string, 'null'], maxLength: 500 }
+        occurred_at: { type: string, format: date-time }
+        source: { type: string, enum: [MANUAL, PARSER, RECEIPT], default: MANUAL }
+    RecentTransaction:
+      type: object
+      additionalProperties: false
+      required: [id, type, amount, category_name, description, occurred_at]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        type: { type: string, enum: [INCOME, EXPENSE] }
+        amount: { type: integer, format: int64 }
+        category_name: { type: [string, 'null'] }
+        description: { type: [string, 'null'] }
+        occurred_at: { $ref: '#/components/schemas/Timestamp' }
+    Summary:
+      type: object
+      additionalProperties: false
+      required: [total_balance, total_income_month, total_expense_month, percentage_change, remaining_debt, recent_transactions]
+      properties:
+        total_balance: { type: integer, format: int64 }
+        total_income_month: { $ref: '#/components/schemas/Money' }
+        total_expense_month: { $ref: '#/components/schemas/Money' }
+        percentage_change: { type: [number, 'null'] }
+        remaining_debt: { $ref: '#/components/schemas/Money' }
+        recent_transactions: { type: array, maxItems: 5, items: { $ref: '#/components/schemas/RecentTransaction' } }
+    MonthBucket:
+      type: object
+      additionalProperties: false
+      required: [month, label, income, expense, net_savings]
+      properties:
+        month: { type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$' }
+        label: { type: string }
+        income: { $ref: '#/components/schemas/Money' }
+        expense: { $ref: '#/components/schemas/Money' }
+        net_savings: { type: integer, format: int64 }
+    AnalyticsKpis:
+      type: object
+      additionalProperties: false
+      required: [income, expense, net_savings, income_change_percent, expense_change_percent]
+      properties:
+        income: { $ref: '#/components/schemas/Money' }
+        expense: { $ref: '#/components/schemas/Money' }
+        net_savings: { type: integer, format: int64 }
+        income_change_percent: { type: [number, 'null'] }
+        expense_change_percent: { type: [number, 'null'] }
+    CategorySlice:
+      type: object
+      additionalProperties: false
+      required: [label, amount, percentage, color]
+      properties:
+        label: { type: string }
+        amount: { $ref: '#/components/schemas/Money' }
+        percentage: { type: integer, minimum: 0, maximum: 100 }
+        color: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+    QuickStats:
+      type: object
+      additionalProperties: false
+      required: [busiest_weekday, largest_category, quietest_week, expense_transaction_count]
+      properties:
+        busiest_weekday: { type: [string, 'null'] }
+        largest_category: { type: [string, 'null'] }
+        quietest_week: { type: [integer, 'null'], minimum: 1, maximum: 5 }
+        expense_transaction_count: { type: integer, minimum: 0 }
+    AnalyticsOverview:
+      type: object
+      additionalProperties: false
+      required: [period, month_label, monthly_buckets, kpis, category_slices, quick_stats, insight]
+      properties:
+        period: { type: string, enum: [7m] }
+        month_label: { type: string }
+        monthly_buckets: { type: array, minItems: 7, maxItems: 7, items: { $ref: '#/components/schemas/MonthBucket' } }
+        kpis: { $ref: '#/components/schemas/AnalyticsKpis' }
+        category_slices: { type: array, maxItems: 6, items: { $ref: '#/components/schemas/CategorySlice' } }
+        quick_stats: { $ref: '#/components/schemas/QuickStats' }
+        insight: { type: [string, 'null'] }
+    ParserRequest:
+      type: object
+      additionalProperties: false
+      required: [input]
+      properties:
+        input: { type: string, minLength: 1, maxLength: 500 }
+    ParserFields:
+      type: object
+      additionalProperties: false
+      properties:
+        amount: { $ref: '#/components/schemas/PositiveMoney' }
+        account_id: { type: [string, 'null'], format: uuid }
+        account_name: { type: [string, 'null'] }
+        category_name: { type: [string, 'null'] }
+        description: { type: [string, 'null'] }
+        debt_name: { type: [string, 'null'] }
+        goal_name: { type: [string, 'null'] }
+        new_balance: { type: [integer, 'null'], format: int64, minimum: 0 }
+    ParserResult:
+      type: object
+      additionalProperties: false
+      required: [intent, confidence, needs_confirmation, fields, reason]
+      properties:
+        intent: { type: string, enum: [create_expense, create_income, set_balance, create_debt, pay_debt, create_goal, deposit_goal, withdraw_goal, update_last_amount, update_last_account, undo_last, get_summary, unknown] }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        needs_confirmation: { type: boolean, const: true }
+        fields: { $ref: '#/components/schemas/ParserFields' }
+        reason: { type: [string, 'null'] }
+    ResetRequest:
+      type: object
+      additionalProperties: false
+      required: [confirmation]
+      properties:
+        confirmation: { type: string, const: RESET }
+    SyncResult:
+      type: object
+      additionalProperties: false
+      required: [status, server_time, revision]
+      properties:
+        status: { type: string, const: synchronized }
+        server_time: { $ref: '#/components/schemas/Timestamp' }
+        revision: { type: string }
+    ResetResult:
+      type: object
+      additionalProperties: false
+      required: [status, reset_at]
+      properties:
+        status: { type: string, const: reset }
+        reset_at: { $ref: '#/components/schemas/Timestamp' }
+    ProfileResponse: { $ref: '#/components/schemas/ProfileEnvelope' }
+    AccountResponse: { $ref: '#/components/schemas/AccountEnvelope' }
+    CategoryResponse: { $ref: '#/components/schemas/CategoryEnvelope' }
+    BudgetResponse: { $ref: '#/components/schemas/BudgetEnvelope' }
+    SavingGoalResponse: { $ref: '#/components/schemas/SavingGoalEnvelope' }
+    DebtResponse: { $ref: '#/components/schemas/DebtEnvelope' }
+    TransactionResponse: { $ref: '#/components/schemas/TransactionEnvelope' }
+    SummaryResponse: { $ref: '#/components/schemas/SummaryEnvelope' }
+    AnalyticsResponse: { $ref: '#/components/schemas/AnalyticsEnvelope' }
+    ParserResponse: { $ref: '#/components/schemas/ParserEnvelope' }
+    SyncResponse: { $ref: '#/components/schemas/SyncEnvelope' }
+    ResetResponse: { $ref: '#/components/schemas/ResetEnvelope' }
+    ProfileEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/Profile' }, meta: { $ref: '#/components/schemas/Meta' } }
+    AccountEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/Account' }, meta: { $ref: '#/components/schemas/Meta' } }
+    CategoryEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/Category' }, meta: { $ref: '#/components/schemas/Meta' } }
+    BudgetEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/MonthlyBudget' }, meta: { $ref: '#/components/schemas/Meta' } }
+    NullableBudgetResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { oneOf: [{ $ref: '#/components/schemas/MonthlyBudget' }, { type: 'null' }] }, meta: { $ref: '#/components/schemas/Meta' } }
+    SavingGoalEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/SavingGoal' }, meta: { $ref: '#/components/schemas/Meta' } }
+    DebtEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/Debt' }, meta: { $ref: '#/components/schemas/Meta' } }
+    TransactionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/Transaction' }, meta: { $ref: '#/components/schemas/Meta' } }
+    SummaryEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/Summary' }, meta: { $ref: '#/components/schemas/Meta' } }
+    AnalyticsEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/AnalyticsOverview' }, meta: { $ref: '#/components/schemas/Meta' } }
+    ParserEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/ParserResult' }, meta: { $ref: '#/components/schemas/Meta' } }
+    SyncEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/SyncResult' }, meta: { $ref: '#/components/schemas/Meta' } }
+    ResetEnvelope:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { $ref: '#/components/schemas/ResetResult' }, meta: { $ref: '#/components/schemas/Meta' } }
+    AccountListResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { type: array, items: { $ref: '#/components/schemas/Account' } }, meta: { $ref: '#/components/schemas/Meta' } }
+    CategoryListResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { type: array, items: { $ref: '#/components/schemas/Category' } }, meta: { $ref: '#/components/schemas/Meta' } }
+    SavingGoalListResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { type: array, items: { $ref: '#/components/schemas/SavingGoal' } }, meta: { $ref: '#/components/schemas/Meta' } }
+    DebtListResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta]
+      properties: { data: { type: array, items: { $ref: '#/components/schemas/Debt' } }, meta: { $ref: '#/components/schemas/Meta' } }

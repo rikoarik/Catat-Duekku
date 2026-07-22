@@ -1,8 +1,8 @@
-import { Text } from '@/components/ui/text';
 import React from 'react';
-import { StyleSheet, View, TouchableOpacity, useColorScheme } from 'react-native';
-;
 import { Notification } from 'iconsax-react-native';
+import { StyleSheet, View, TouchableOpacity, useColorScheme } from 'react-native';
+
+import { Text } from '@/components/ui/text';
 import { t } from '@/core/i18n/strings';
 import { getTheme } from '@/core/theme/colors';
 
@@ -10,12 +10,14 @@ interface DashboardHeaderProps {
   userName?: string;
   onNotificationPress?: () => void;
   onProfilePress?: () => void;
+  hasUnreadNotifications?: boolean;
 }
 
 export function DashboardHeader({
   userName = t('dashboard.fallbackUserName'),
   onNotificationPress,
   onProfilePress,
+  hasUnreadNotifications = false,
 }: DashboardHeaderProps) {
   const colorScheme = useColorScheme();
   const theme = getTheme(colorScheme);
@@ -56,7 +58,7 @@ export function DashboardHeader({
           ]}
           onPress={onNotificationPress}>
           <Notification color={theme.textPrimary} size={20} variant="Outline" />
-          <View style={[styles.badge, { backgroundColor: theme.expense }]} />
+          {hasUnreadNotifications ? <View style={[styles.badge, { backgroundColor: theme.expense }]} /> : null}
         </TouchableOpacity>
       </View>
     </View>

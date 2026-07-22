@@ -7,28 +7,32 @@ import '@/global.css';
 
 import { Platform } from 'react-native';
 
+import { Colors as CoreColors } from '@/core/theme/colors';
+
 export const Colors = {
   light: {
-    text: '#0F3D3E', // Deep Teal
-    background: '#FFFFFF', // Pure White
-    backgroundElement: '#F4F5F7', // Pale Mint
-    backgroundSelected: '#B7E36D', // Soft Lime
-    textSecondary: '#60646C',
-    tint: '#B7E36D', // Soft Lime
-    income: '#22C55E',
-    expense: '#FF6B6B',
+    text: CoreColors.light.textPrimary,
+    background: CoreColors.light.background,
+    backgroundElement: CoreColors.light.surfaceElement,
+    backgroundSelected: CoreColors.light.accent,
+    textSecondary: CoreColors.light.textSecondary,
+    tint: CoreColors.light.tint,
+    income: CoreColors.light.income,
+    expense: CoreColors.light.expense,
   },
   dark: {
-    text: '#FAFCFB', // Off-White
-    background: '#0F3D3E', // Deep Teal
-    backgroundElement: '#144F50', // Slightly lighter Deep Teal
-    backgroundSelected: '#B7E36D', // Soft Lime
-    textSecondary: '#E6F4F1', // Pale Mint
-    tint: '#B7E36D', // Soft Lime
-    income: '#22C55E',
-    expense: '#FF6B6B',
+    text: CoreColors.dark.textPrimary,
+    background: CoreColors.dark.background,
+    backgroundElement: CoreColors.dark.surfaceElement,
+    backgroundSelected: CoreColors.dark.accent,
+    textSecondary: CoreColors.dark.textSecondary,
+    tint: CoreColors.dark.tint,
+    income: CoreColors.dark.income,
+    expense: CoreColors.dark.expense,
   },
 } as const;
+
+// ponytail: keep this legacy bridge until old starter/web components stop importing it.
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 

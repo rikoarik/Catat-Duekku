@@ -1,6 +1,7 @@
 import { Text } from '@/components/ui/text';
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -15,6 +16,8 @@ import {
 } from 'react-native';
 import Animated, { FadeInDown, FadeOutUp, LinearTransition } from 'react-native-reanimated';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { CustomDatePickerModal } from '@/components/ui/custom-date-picker-modal';
 import {
   Add,
@@ -27,14 +30,17 @@ import {
   CloseCircle,
   Clock,
   DocumentText,
-  DollarCircle,
-  Receipt2,
-  WalletAdd,
+   DollarCircle,
+    Edit2,
+    Receipt2,
+    Trash,
+   WalletAdd,
+
 } from 'iconsax-react-native';
 import { getTheme } from '@/core/theme/colors';
-import { financeStore } from '@/core/lib/finance-store';
-import { buildInstallmentPlan, summarizeInstallmentDue } from '@/core/lib/installment';
-import { currentYearMonth, dueLabel, formatLongDate, monthProgress, monthlyNeeded, parseIsoDate, toIsoDate, todayIso, daysUntil } from '@/core/lib/dates';
+import { edgeApi, idempotencyKey, type Account, type Budget, type Category as ApiCategory, type Debt, type SavingGoal } from '@/core/lib/edge-api';
+import { summarizeInstallmentDue } from '@/core/lib/installment';
+import { currentYearMonth, dueLabel, formatLongDate, monthProgress, monthlyNeeded, todayIso } from '@/core/lib/dates';
 import { formatCurrency } from '@/core/utils/formatters';
 import type { InstallmentPlan } from '@/types/debt';
 
@@ -45,10 +51,8 @@ interface ManageScreenProps {
   onOpen?: (section: ManageSection) => void;
 }
 
-interface AccountItem {
-  name: string;
-  balance: string;
-}
+type DeleteTarget = { kind: 'account' | 'category'; id: string; name: string; version: number };
+type EditTarget = DeleteTarget;
 
 interface SavingsItem {
   id: string;
@@ -57,23 +61,6 @@ interface SavingsItem {
   targetDate?: string;
   savedAmount: number;
 }
-
-interface DebtItem {
-  id: string;
-  name: string;
-  totalAmount: number;
-  paidAmount: number;
-  installmentPlan?: InstallmentPlan;
-}
-
-const INITIAL_ACCOUNTS: AccountItem[] = [
-  { name: 'Cash', balance: 'Rp1.150.000' },
-  { name: 'Bank', balance: 'Rp11.700.000' },
-  { name: 'E-Wallet', balance: 'Rp1.850.000' },
-];
-
-const INITIAL_CATEGORIES = ['Makan', 'Transport', 'Belanja', 'Tagihan'];
-const INITIAL_DEBTS: DebtItem[] = [];
 
 const FORM_COPY: Record<FormKind, { title: string; placeholder: string; buttonText: string }> = {
   account: { title: 'Tambah Akun Pembayaran', placeholder: 'Contoh: Bank BCA / E-Wallet', buttonText: 'Simpan Akun' },
@@ -93,6 +80,7 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
   const [savingsIndex, setSavingsIndex] = useState(0);
   const [value, setValue] = useState('');
   const [accountName, setAccountName] = useState('');
+  const [accountBalance, setAccountBalance] = useState('');
   const [savingsName, setSavingsName] = useState('');
   const [savingsTargetAmount, setSavingsTargetAmount] = useState('');
   const [savingsTargetDate, setSavingsTargetDate] = useState('');
@@ -101,20 +89,54 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
   const [debtPaidMonths, setDebtPaidMonths] = useState('0');
   const [debtStartDate, setDebtStartDate] = useState(todayIso());
   const [datePickerTarget, setDatePickerTarget] = useState<'savings' | 'debt' | null>(null);
-  const [accounts, setAccounts] = useState(INITIAL_ACCOUNTS);
-  const [categories, setCategories] = useState(INITIAL_CATEGORIES);
-  const [budgetLimit, setBudgetLimit] = useState(5_000_000);
-  const [budgetUsed] = useState(3_450_000);
-  const [debts, setDebts] = useState<DebtItem[]>(INITIAL_DEBTS);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [categories, setCategories] = useState<ApiCategory[]>([]);
+  const [budget, setBudget] = useState<Budget | null>(null);
+  const [debts, setDebts] = useState<Debt[]>([]);
+  const [goals, setGoals] = useState<SavingGoal[]>([]);
   const [debtTenor, setDebtTenor] = useState('12');
-  const [goalsVersion, setGoalsVersion] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [error, setError] = useState('');
 
-  const goals = useMemo(() => financeStore.getGoals(), [goalsVersion]);
+  const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [accountResult, categoryResult, budgetResult, goalResult, debtResult] = await Promise.all([edgeApi.accounts(), edgeApi.categories(), edgeApi.budget().catch(() => ({ data: null })), edgeApi.goals(), edgeApi.debts()]);
+      setAccounts(accountResult.data);
+      setCategories(categoryResult.data);
+      setBudget(budgetResult.data);
+      setGoals(goalResult.data);
+      setDebts(debtResult.data);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Gagal memuat data server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    Promise.all([edgeApi.accounts(), edgeApi.categories(), edgeApi.budget().catch(() => ({ data: null })), edgeApi.goals(), edgeApi.debts()]).then(([accountResult, categoryResult, budgetResult, goalResult, debtResult]) => {
+      setAccounts(accountResult.data);
+      setCategories(categoryResult.data);
+      setBudget(budgetResult.data);
+      setGoals(goalResult.data);
+      setDebts(debtResult.data);
+    }).catch((cause) => setError(cause instanceof Error ? cause.message : 'Gagal memuat data server.')).finally(() => setLoading(false));
+  }, []);
+
   const savingsItems: SavingsItem[] = goals.length
-    ? goals
+    ? goals.map((goal) => ({ id: goal.id, name: goal.name, targetAmount: goal.target_amount, targetDate: goal.target_date ?? undefined, savedAmount: goal.saved_amount }))
     : [{ id: 'empty', name: 'Tambah target', targetAmount: 0, savedAmount: 0 }];
-  const budgetRemaining = Math.max(budgetLimit - budgetUsed, 0);
-  const budgetPercent = budgetLimit > 0 ? Math.min(Math.round((budgetUsed / budgetLimit) * 100), 100) : 0;
+  const budgetLimit = budget?.total_limit ?? 0;
+  const budgetUsed = budget?.used_amount ?? 0;
+  const budgetRemaining = budget?.remaining_amount ?? 0;
+  const budgetPercent = Math.min(Math.round(budget?.percent_used ?? 0), 100);
   const monthMeta = monthProgress(currentYearMonth());
   const activeGoal = savingsItems[savingsIndex];
   const activeGoalRemaining = activeGoal ? Math.max(activeGoal.targetAmount - activeGoal.savedAmount, 0) : 0;
@@ -138,8 +160,11 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
   };
 
   const openForm = (kind: FormKind) => {
+    setEditTarget(null);
+    setError('');
     setValue('');
     setAccountName('');
+    setAccountBalance('');
     setSavingsName('');
     setSavingsTargetAmount('');
     setSavingsTargetDate('');
@@ -151,82 +176,72 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
     setForm(kind);
   };
 
-  const closeForm = () => setForm(null);
-
-  const saveForm = () => {
-    if (!form) return;
-
-    if (form === 'account') {
-      const nextName = accountName.trim();
-      if (!nextName) return;
-      setAccounts((items) => [...items, { name: nextName, balance: 'Rp0' }]);
-      closeForm();
-      return;
+  const openEdit = (target: EditTarget) => {
+    setError('');
+    setEditTarget(target);
+    if (target.kind === 'account') {
+      setAccountName(target.name);
+      setAccountBalance('');
+    } else setValue(target.name);
+    setForm(target.kind);
+  };
+  const closeForm = () => {
+    setForm(null);
+    setEditTarget(null);
+  };
+  const openDelete = (target: DeleteTarget) => {
+    setDeleteError('');
+    setDeleteTarget(target);
+  };
+  const closeDelete = () => {
+    if (!deleting) setDeleteTarget(null);
+  };
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      if (deleteTarget.kind === 'account') await edgeApi.deleteAccount(deleteTarget.id, deleteTarget.version);
+      else await edgeApi.deleteCategory(deleteTarget.id, deleteTarget.version);
+      await load();
+      setDeleteTarget(null);
+    } catch (cause) {
+      setDeleteError(cause instanceof Error ? cause.message : 'Gagal menghapus data.');
+    } finally {
+      setDeleting(false);
     }
+  };
 
-    if (form === 'budget') {
-      const next = value.trim();
-      if (!next) return;
-      setBudgetLimit(Number(next.replace(/\D/g, '') || 0));
-      closeForm();
-      return;
-    }
-
-    if (form === 'savings') {
-      const nextName = savingsName.trim();
-      const amount = Number(savingsTargetAmount.replace(/\D/g, '') || 0);
-      if (!nextName || amount <= 0) return;
-      financeStore.createGoal({
-        name: nextName,
-        targetAmount: amount,
-        targetDate: savingsTargetDate.trim() || undefined,
-      });
+  const saveForm = async () => {
+    if (!form || saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      if (form === 'account') {
+        if (editTarget) await edgeApi.updateAccount(editTarget.id, accountName.trim(), editTarget.version);
+        else {
+          const openingBal = Number(accountBalance.replace(/\D/g, '')) || 0;
+          await edgeApi.createAccount({ name: accountName.trim(), kind: 'BANK', opening_balance: openingBal }, idempotencyKey('account'));
+        }
+      }
+      if (form === 'budget') await edgeApi.upsertBudget(Number(value.replace(/\D/g, '')), budget?.version);
+      if (form === 'savings') await edgeApi.createGoal({ name: savingsName.trim(), target_amount: Number(savingsTargetAmount), target_date: savingsTargetDate || null }, idempotencyKey('goal'));
+      if (form === 'debt') {
+        const tenor = Math.max(1, Number(debtTenor));
+        await edgeApi.createDebt({ name: debtName.trim(), total_amount: Number(debtAmount), tenor_months: tenor, paid_installments: Math.min(tenor, Math.max(0, Number(debtPaidMonths))), start_date: debtStartDate }, idempotencyKey('debt'));
+      }
+      if (form === 'category') {
+        if (editTarget) await edgeApi.updateCategory(editTarget.id, value.trim(), editTarget.version);
+        else await edgeApi.createCategory({ name: value.trim(), type: 'EXPENSE' }, idempotencyKey('category'));
+      }
+      await load();
       setSavingsIndex(0);
-      setGoalsVersion((current) => current + 1);
       closeForm();
-      return;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Gagal menyimpan data.');
+    } finally {
+      setSaving(false);
     }
-
-    if (form === 'debt') {
-      const nextName = debtName.trim();
-      const total = Number(debtAmount.replace(/\D/g, '') || 0);
-      if (!nextName || total <= 0) return;
-      const tenorNum = Math.max(1, parseInt(debtTenor.replace(/\D/g, ''), 10) || 12);
-      const paidMonths = Math.max(0, Math.min(tenorNum, parseInt(debtPaidMonths.replace(/\D/g, ''), 10) || 0));
-      const plan = buildInstallmentPlan({
-        totalAmount: total,
-        tenorMonths: tenorNum,
-        startDate: debtStartDate,
-        paidInstallments: paidMonths,
-      });
-      const paidAmount = Math.min(total, plan.monthly_amount * paidMonths);
-      financeStore.createDebt({
-        name: nextName,
-        totalAmount: total,
-        paidAmount,
-        dueDate: plan.projected_payoff_date,
-      });
-      setDebts((items) => [
-        ...items,
-        {
-          id: `debt-${Date.now()}`,
-          name: nextName,
-          totalAmount: total,
-          paidAmount,
-          installmentPlan: plan,
-        },
-      ]);
-      closeForm();
-      return;
-    }
-
-    const next = value.trim();
-    if (!next) return;
-    if (form === 'category') {
-      setCategories((items) => [...items, next]);
-    }
-
-    closeForm();
   };
 
   return (
@@ -235,6 +250,15 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
         <Animated.View entering={FadeInDown.duration(320)} layout={LinearTransition.springify()} style={styles.header}>
           <Text style={[styles.title, { color: theme.textPrimary }]}>Kelola</Text>
           <Text style={[styles.subtitle, { color: theme.textMuted }]}>Widget finansialmu.</Text>
+          {loading ? <ActivityIndicator color={theme.primary} style={{ marginTop: 8 }} /> : null}
+          {error ? (
+            <View style={styles.errorContainer}>
+              <Text style={[styles.errorText, { color: theme.expense }]}>{error}</Text>
+              <TouchableOpacity activeOpacity={0.7} style={[styles.retryBtn, { backgroundColor: theme.surfaceElement, borderColor: theme.border }]} onPress={load}>
+                <Text style={[styles.retryText, { color: theme.primary }]} weight="semibold">Coba Lagi</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </Animated.View>
 
         <Animated.View entering={FadeInDown.delay(60).duration(320)} layout={LinearTransition.springify()}>
@@ -247,9 +271,10 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
               onAdd={() => openForm('account')}
             />
             <View style={styles.widgetBody}>
-              {accounts.map((item) => (
-                <InlineRow key={item.name} label={item.name} value={item.balance} theme={theme} />
-              ))}
+               {accounts.map((item) => (
+                 <InlineRow key={item.id} label={item.name} value={formatCurrency(item.balance)} theme={theme} onEdit={() => openEdit({ kind: 'account', id: item.id, name: item.name, version: item.version })} onDelete={() => openDelete({ kind: 'account', id: item.id, name: item.name, version: item.version })} />
+               ))}
+
             </View>
           </View>
         </Animated.View>
@@ -322,8 +347,8 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
               ) : (
                 <View style={{ gap: 6 }}>
                   {debts.slice(0, 1).map((item) => {
-                    const plan = item.installmentPlan;
-                    const remaining = item.totalAmount - item.paidAmount;
+                    const plan = item.installment_plan as InstallmentPlan;
+                    const remaining = item.remaining_amount;
                     const due = summarizeInstallmentDue(plan);
                     const dueTone = due?.status === 'overdue'
                       ? theme.expense
@@ -410,8 +435,14 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
                     style={styles.categoryScrollView}
                   >
                     {categories.map((category) => (
-                      <View key={category} style={[styles.chip, { backgroundColor: theme.surfaceElement }]}>
-                        <Text style={[styles.chipText, { color: theme.textPrimary }]}>{category}</Text>
+                      <View key={category.id} style={[styles.chip, { backgroundColor: theme.surfaceElement }]}>
+                        <Text style={[styles.chipText, { color: theme.textPrimary }]}>{category.name}</Text>
+                        <TouchableOpacity accessibilityLabel={`Edit kategori ${category.name}`} hitSlop={8} onPress={() => openEdit({ kind: 'category', id: category.id, name: category.name, version: category.version })}>
+                          <Edit2 color={theme.deepTeal} size={14} variant="Outline" />
+                        </TouchableOpacity>
+                        <TouchableOpacity accessibilityLabel={`Hapus kategori ${category.name}`} hitSlop={8} onPress={() => openDelete({ kind: 'category', id: category.id, name: category.name, version: category.version })}>
+                          <CloseCircle color={theme.expense} size={15} variant="Outline" />
+                        </TouchableOpacity>
                       </View>
                     ))}
                   </ScrollView>
@@ -429,6 +460,29 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
         </Animated.View>
       </ScrollView>
 
+      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={closeDelete}>
+        <Pressable style={styles.confirmBackdrop} onPress={closeDelete}>
+          <Pressable onPress={(event) => event.stopPropagation()}>
+            <Card variant="default" style={styles.confirmCard}>
+              <View style={[styles.deleteIcon, { backgroundColor: theme.expenseSurface }]}>
+                <Trash color={theme.expense} size={24} variant="Outline" />
+              </View>
+              <Text style={[styles.confirmTitle, { color: theme.textPrimary }]} weight="bold">Hapus {deleteTarget?.kind === 'account' ? 'akun' : 'kategori'}?</Text>
+              <Text style={[styles.confirmMessage, { color: theme.textSecondary }]}>
+                {deleteTarget?.kind === 'account'
+                  ? `Akun “${deleteTarget.name}” hanya dapat dihapus jika bukan akun default, saldo nol, dan belum dipakai transaksi aktif.`
+                  : `Kategori “${deleteTarget?.name ?? ''}” akan disembunyikan dari pilihan baru. Histori transaksi tetap tersimpan.`}
+              </Text>
+              {deleteError ? <Text style={[styles.confirmError, { color: theme.expense }]}>{deleteError}</Text> : null}
+              <View style={styles.confirmActions}>
+                <Button title="Batal" variant="outline" disabled={deleting} onPress={closeDelete} style={styles.confirmButton} />
+                <Button title={deleting ? 'Menghapus…' : 'Hapus'} disabled={deleting} onPress={confirmDelete} style={[styles.confirmButton, { backgroundColor: theme.expense }]} />
+              </View>
+            </Card>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       <Modal visible={!!form} transparent animationType="slide" onRequestClose={closeForm}>
         <Pressable style={styles.modalBackdrop} onPress={closeForm}>
           <Pressable
@@ -440,7 +494,7 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
 
             <View style={styles.sheetHeader}>
               <Text style={[styles.sheetTitle, { color: theme.textPrimary }]} weight="bold">
-                {form ? FORM_COPY[form].title : ''}
+                 {editTarget ? `Edit ${editTarget.kind === 'account' ? 'Akun' : 'Kategori'}` : form ? FORM_COPY[form].title : ''}
               </Text>
               <TouchableOpacity onPress={closeForm} accessibilityLabel="Tutup" hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <CloseCircle color={theme.textMuted} size={24} variant="Outline" />
@@ -685,6 +739,30 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
                       />
                     </View>
                   </View>
+
+                  {!editTarget ? (
+                    <View style={styles.fieldBlock}>
+                      <Text style={[styles.fieldLabelText, { color: theme.textMuted }]} weight="bold">
+                        SALDO AWAL (RP)
+                      </Text>
+                      <View style={[styles.inputWithIcon, { borderColor: theme.border, backgroundColor: theme.surfaceElement }]}>
+                        <DollarCircle color={theme.textSecondary} size={20} variant="Outline" />
+                        <TextInput
+                          value={accountBalance}
+                          onChangeText={(t) => setAccountBalance(t.replace(/\D/g, ''))}
+                          placeholder="Contoh: 1500000 (Bisa 0)"
+                          keyboardType="numeric"
+                          placeholderTextColor={theme.textMuted}
+                          style={[styles.flexInput, { color: theme.textPrimary }]}
+                        />
+                      </View>
+                      {Number(accountBalance) > 0 ? (
+                        <Text style={[styles.inputHelperText, { color: theme.income }]} weight="semibold">
+                          = {formatCurrency(Number(accountBalance))}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : null}
                 </View>
               ) : (
                 <View style={styles.formFieldsGap}>
@@ -717,9 +795,10 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
                 </View>
               )}
 
-              <TouchableOpacity
-                onPress={saveForm}
-                disabled={form === 'debt' ? (!debtName.trim() || !debtAmount.trim()) : form === 'savings' ? (!savingsName.trim() || !savingsTargetAmount.trim()) : form === 'account' ? !accountName.trim() : !value.trim()}
+               {form && error ? <Text style={[styles.confirmError, { color: theme.expense }]}>{error}</Text> : null}
+               <TouchableOpacity
+                 onPress={() => void saveForm()}
+                disabled={saving || (form === 'debt' ? (!debtName.trim() || !debtAmount.trim()) : form === 'savings' ? (!savingsName.trim() || !savingsTargetAmount.trim()) : form === 'account' ? !accountName.trim() : !value.trim())}
                 style={[
                   styles.save,
                   {
@@ -729,7 +808,7 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
                 ]}
               >
                 <Text style={{ color: (form === 'debt' ? (debtName.trim() && debtAmount.trim()) : form === 'savings' ? (savingsName.trim() && savingsTargetAmount.trim()) : form === 'account' ? accountName.trim() : value.trim()) ? theme.onPrimary : theme.textMuted, fontWeight: '800' }}>
-                  {form ? FORM_COPY[form].buttonText : 'Simpan'}
+                   {editTarget ? 'Simpan Perubahan' : form ? FORM_COPY[form].buttonText : 'Simpan'}
                 </Text>
               </TouchableOpacity>
             </KeyboardAwareScrollView>
@@ -916,15 +995,31 @@ function InlineRow({
   label,
   theme,
   value,
+  onEdit,
+  onDelete,
 }: {
   label: string;
   theme: ReturnType<typeof getTheme>;
   value: string;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
   return (
     <View style={styles.inlineRow}>
       <Text style={[styles.inlineLabel, { color: theme.textMuted }]}>{label}</Text>
-      <Text style={[styles.inlineValue, { color: theme.textPrimary }]}>{value}</Text>
+      <View style={styles.inlineActions}>
+        <Text style={[styles.inlineValue, { color: theme.textPrimary }]}>{value}</Text>
+        {onEdit ? (
+          <TouchableOpacity accessibilityLabel={`Edit ${label}`} hitSlop={8} onPress={onEdit}>
+            <Edit2 color={theme.deepTeal} size={17} variant="Outline" />
+          </TouchableOpacity>
+        ) : null}
+        {onDelete ? (
+          <TouchableOpacity accessibilityLabel={`Hapus ${label}`} hitSlop={8} onPress={onDelete}>
+            <Trash color={theme.expense} size={17} variant="Outline" />
+          </TouchableOpacity>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -934,6 +1029,10 @@ const styles = StyleSheet.create({
   header: { gap: 6, marginBottom: 8 },
   title: { fontSize: 24, fontWeight: '800', letterSpacing: -0.8 },
   subtitle: { fontSize: 14, lineHeight: 20 },
+  errorContainer: { marginTop: 8, padding: 12, borderRadius: 16, backgroundColor: '#FDECEC', gap: 8 },
+  errorText: { fontSize: 13, lineHeight: 18, fontWeight: '600' },
+  retryBtn: { alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
+  retryText: { fontSize: 12 },
   widget: { borderWidth: 1, borderRadius: 28, padding: 16, gap: 8 },
   widgetHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   widgetBody: { gap: 10, paddingTop: 2 },
@@ -993,10 +1092,11 @@ const styles = StyleSheet.create({
   track: { height: 8, borderRadius: 999, overflow: 'hidden' },
   fill: { height: '100%', borderRadius: 999 },
   inlineRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  inlineActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   inlineLabel: { fontSize: 13, fontWeight: '600' },
   inlineValue: { fontSize: 13, fontWeight: '800' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
   chipText: { fontSize: 12, fontWeight: '700' },
   categoryScrollContent: {
     flexDirection: 'row',
@@ -1025,6 +1125,14 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   addChipText: { fontSize: 12, fontWeight: '700' },
+  confirmBackdrop: { flex: 1, justifyContent: 'center', paddingHorizontal: 24, backgroundColor: 'rgba(7, 32, 31, 0.46)' },
+  confirmCard: { alignItems: 'center', padding: 22 },
+  deleteIcon: { width: 52, height: 52, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  confirmTitle: { fontSize: 20, textAlign: 'center' },
+  confirmMessage: { fontSize: 13, lineHeight: 20, textAlign: 'center', marginTop: 8 },
+  confirmError: { fontSize: 12, lineHeight: 18, textAlign: 'center', marginTop: 10 },
+  confirmActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
+  confirmButton: { flex: 1 },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(7, 32, 31, 0.46)' },
   sheet: {
     borderTopLeftRadius: 28,

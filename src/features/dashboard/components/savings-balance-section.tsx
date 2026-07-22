@@ -1,28 +1,27 @@
 import { Text } from '@/components/ui/text';
-import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, ScrollView, TouchableOpacity, useColorScheme } from 'react-native';
-;
-import Animated, {
-  useAnimatedStyle,
-  withTiming,
-  withSpring,
-  withSequence,
-  useSharedValue,
-  Easing,
-} from 'react-native-reanimated';
+import { getTheme } from '@/core/theme/colors';
 import * as Haptics from 'expo-haptics';
 import {
   ArrowUp,
-  MoneyRecive,
-  MoneyChange,
-  WalletAdd,
   CardReceive,
   Chart,
   Eye,
   EyeSlash,
+  MoneyChange,
+  MoneyRecive,
+  WalletAdd,
 } from 'iconsax-react-native';
-import { getTheme } from '@/core/theme/colors';
-import { t } from '@/core/i18n/strings';
+import { useEffect, useRef, useState, useMemo } from 'react';
+import { ScrollView, StyleSheet, TouchableOpacity, useColorScheme, View } from 'react-native';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
+;
 
 export interface TargetOrDebtItem {
   id: string;
@@ -36,98 +35,157 @@ export interface TargetOrDebtItem {
   icon: 'income' | 'expense' | 'savings' | 'debt' | 'budget';
 }
 
-const ITEMS: TargetOrDebtItem[] = [
+const BASE_ITEMS_CONFIG = [
   {
     id: '1',
     title: 'Pemasukan',
-    type: 'income',
-    currentAmount: 7500000,
-    targetAmount: 10000000,
-    dueDate: 'Juli 2026',
+    type: 'income' as const,
     color: '#0A3331',
     bgColor: '#A3E635',
-    icon: 'income',
+    icon: 'income' as const,
   },
   {
     id: '2',
     title: 'Pengeluaran',
-    type: 'expense',
-    currentAmount: 2430000,
-    targetAmount: 5000000,
-    dueDate: 'Juli 2026',
+    type: 'expense' as const,
     color: '#EA580C',
-    bgColor: '#FF6B35',
-    icon: 'expense',
+    bgColor: '#F1B8A3',
+    icon: 'expense' as const,
   },
   {
     id: '3',
     title: 'Tabungan',
-    type: 'savings',
-    currentAmount: 2500000,
-    targetAmount: 10000000,
-    dueDate: '2026',
+    type: 'savings' as const,
     color: '#854D0E',
     bgColor: '#FACC15',
-    icon: 'savings',
+    icon: 'savings' as const,
   },
   {
     id: '4',
-    title: 'Sisa utang',
-    type: 'debt',
-    currentAmount: 450000,
-    targetAmount: 1000000,
-    dueDate: '30 Jul 2026',
-    color: '#D97706',
-    bgColor: '#FB923C',
-    icon: 'debt',
+    title: 'Sisa Utang',
+    type: 'debt' as const,
+    color: '#D906AB',
+    bgColor: '#FE9CCD',
+    icon: 'debt' as const,
   },
   {
     id: '5',
-    title: 'Sisa budget',
-    type: 'budget',
-    currentAmount: 2570000,
-    targetAmount: 5000000,
-    dueDate: 'Juli 2026',
+    title: 'Sisa Budget',
+    type: 'budget' as const,
     color: '#0369A1',
     bgColor: '#38BDF8',
-    icon: 'budget',
+    icon: 'budget' as const,
   },
 ];
 
 export function SavingsBalanceSection({
-  totalBalance = 13509570,
-  monthlyIncomeChange = 3004300,
-  percentChange = 12.3,
-  onFilterChange,
+  totalBalance = 0,
+  monthlyIncomeChange = 0,
+  monthlyExpense = 0,
+  remainingDebt = 0,
+  percentChange = 0,
 }: any) {
   const colorScheme = useColorScheme();
   const theme = getTheme(colorScheme);
   const isDark = colorScheme === 'dark';
 
-  const [activeRange, setActiveRange] = useState<'24h' | '7d' | '30d'>('30d');
+  const netSavings = Math.max(0, monthlyIncomeChange - Math.abs(monthlyExpense));
+  const remainingBudget = Math.max(0, monthlyIncomeChange - Math.abs(monthlyExpense));
+
+  const ITEMS: TargetOrDebtItem[] = BASE_ITEMS_CONFIG.map((item) => {
+    let currentAmount = 0;
+    let targetAmount = 0;
+
+    switch (item.type) {
+      case 'income':
+        currentAmount = monthlyIncomeChange;
+        targetAmount = monthlyIncomeChange;
+        break;
+      case 'expense':
+        currentAmount = Math.abs(monthlyExpense);
+        targetAmount = monthlyIncomeChange > 0 ? monthlyIncomeChange : Math.abs(monthlyExpense);
+        break;
+      case 'savings':
+        currentAmount = netSavings;
+        targetAmount = totalBalance > 0 ? totalBalance : netSavings;
+        break;
+      case 'debt':
+        currentAmount = remainingDebt;
+        targetAmount = remainingDebt;
+        break;
+      case 'budget':
+        currentAmount = remainingBudget;
+        targetAmount = monthlyIncomeChange > 0 ? monthlyIncomeChange : remainingBudget;
+        break;
+    }
+
+    return {
+      ...item,
+      currentAmount,
+      targetAmount,
+    };
+  });
+
   const [selectedItemId, setSelectedItemId] = useState<string>('2');
-  
-  // State toggle mata
   const [isBalanceVisible, setIsBalanceVisible] = useState<boolean>(true);
 
-  // Ref throttling haptic scroll
-  const lastXRef = useRef(0);
-  const lastTimeRef = useRef(0);
+  const lastTickIndexRef = useRef(-1);
+  const STRIPE_STEP = 6;
+  const ITEM_WIDTHS: { [key: string]: number } = {
+    '1': 140,
+    '2': 210,
+    '3': 115,
+    '4': 175,
+    '5': 90,
+  };
+
+  const getItemWidth = (id: string) => ITEM_WIDTHS[id] ?? 120;
+  const singleSetWidth = ITEMS.reduce((acc, item) => acc + getItemWidth(item.id), 0);
+
+  const itemOffsets = useMemo(() => {
+    let currentOffset = 0;
+    return ITEMS.map((item) => {
+      const width = getItemWidth(item.id);
+      const start = currentOffset;
+      currentOffset += width;
+      return { ...item, width, start, end: currentOffset };
+    });
+  }, [ITEMS]);
+
+  const scrollViewRef = useRef<ScrollView>(null);
+  const LOOPED_ITEMS = [...ITEMS, ...ITEMS, ...ITEMS];
+
+  useEffect(() => {
+    setTimeout(() => {
+      scrollViewRef.current?.scrollTo({ x: singleSetWidth, animated: false });
+    }, 50);
+  }, [singleSetWidth]);
 
   const handleScroll = (event: any) => {
     const currentX = event.nativeEvent.contentOffset.x;
-    const now = Date.now();
 
-    if (Math.abs(currentX - lastXRef.current) > 14 && now - lastTimeRef.current > 35) {
-      lastXRef.current = currentX;
-      lastTimeRef.current = now;
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const stripeIndex = Math.round(currentX / STRIPE_STEP);
+    if (stripeIndex !== lastTickIndexRef.current) {
+      lastTickIndexRef.current = stripeIndex;
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+
+    const modX = (currentX + 160) % singleSetWidth;
+    const currentActiveItem = itemOffsets.find((item: { start: number; end: number; id: string }) => modX >= item.start && modX < item.end);
+
+    if (currentActiveItem && currentActiveItem.id !== selectedItemId) {
+      setSelectedItemId(currentActiveItem.id);
+      void Haptics.selectionAsync();
     }
   };
 
-  const handleRangePress = (range: '24h' | '7d' | '30d') => {
-    setActiveRange(range);
-    onFilterChange?.(range);
+  const handleMomentumScrollEnd = (event: any) => {
+    const currentX = event.nativeEvent.contentOffset.x;
+    if (currentX < singleSetWidth * 0.3) {
+      scrollViewRef.current?.scrollTo({ x: currentX + singleSetWidth, animated: false });
+    } else if (currentX > singleSetWidth * 2.3) {
+      scrollViewRef.current?.scrollTo({ x: currentX - singleSetWidth, animated: false });
+    }
   };
 
   const toggleEye = () => {
@@ -175,19 +233,7 @@ export function SavingsBalanceSection({
           </TouchableOpacity>
         </View>
 
-        <View style={[styles.filterPillsContainer, { backgroundColor: isDark ? theme.surfaceMuted : '#F1F5F9' }]}>
-          {(['24h', '7d', '30d'] as const).map((range) => (
-            <TouchableOpacity
-              key={range}
-              activeOpacity={0.8}
-              style={[styles.rangePill, activeRange === range && styles.activeRangePill]}
-              onPress={() => handleRangePress(range)}>
-              <Text style={[styles.rangeText, activeRange === range ? styles.activeRangeText : { color: theme.textMuted }]}>
-                {range}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+
       </View>
 
       {/* Amount Text */}
@@ -205,63 +251,68 @@ export function SavingsBalanceSection({
 
       {/* Meter Bar Spectrum */}
       <View style={styles.spectrumCardWrapper}>
-        <ScrollView
-          horizontal
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
-          decelerationRate="fast"
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.scrollableSpectrumContent}>
-          
-          <View style={styles.meterContainer}>
-            {/* Row Item Badges */}
-            <View style={styles.iconBadgesRow}>
-              {ITEMS.map((item, index) => {
-                const isSelected = item.id === selectedItemId;
-                const leftPosition = 20 + index * 105;
-
-                return (
-                  <TouchableOpacity
-                    key={item.id}
-                    activeOpacity={0.9}
-                    style={[styles.itemColumn, { left: leftPosition }]}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                      setSelectedItemId(item.id);
-                    }}>
-                    <AnimatedItemBadge
-                      bgColor={item.bgColor}
-                      color={item.color}
-                      icon={item.icon}
-                      isSelected={isSelected}
-                      renderIcon={renderIcon}
-                    />
-                    <AnimatedPointerPin color={item.color} isSelected={isSelected} />
-                  </TouchableOpacity>
-                );
-              })}
+        <View style={styles.rulerContainer}>
+          {/* Fixed Center Indicator Pin & Icon (Pill Indicator) */}
+          <View style={styles.fixedCenterPointer}>
+            <View style={[styles.centerIconBadge, { backgroundColor: selectedItem.bgColor }]}>
+              {renderIcon(selectedItem.icon, selectedItem.color)}
             </View>
-
-            {/* Gerigi Sisir */}
-            <View style={styles.stripesMeterWrapper}>
-              {Array.from({ length: 90 }).map((_, i) => {
-                let stripeColor = '#A3E635';
-                if (i > 18 && i <= 36) stripeColor = '#FF6B35';
-                else if (i > 36 && i <= 54) stripeColor = '#FACC15';
-                else if (i > 54 && i <= 72) stripeColor = '#FB923C';
-                else if (i > 72) stripeColor = '#38BDF8';
-
-                return (
-                  <View
-                    key={i}
-                    style={[styles.fineStripe, { backgroundColor: stripeColor }]}
-                  />
-                );
-              })}
-            </View>
-
+            <View style={[styles.centerPointerPin, { backgroundColor: selectedItem.color }]} />
           </View>
-        </ScrollView>
+
+          <ScrollView
+            ref={scrollViewRef}
+            horizontal
+            onScroll={handleScroll}
+            onMomentumScrollEnd={handleMomentumScrollEnd}
+            scrollEventThrottle={8}
+            decelerationRate={0.988}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.scrollableSpectrumContent}>
+            <View style={styles.meterStripesContainer}>
+              {LOOPED_ITEMS.map((item, itemIdx) => {
+                const isSelected = item.id === selectedItemId;
+                const segmentWidth = getItemWidth(item.id);
+                const ticksCount = Math.floor(segmentWidth / STRIPE_STEP);
+
+                return (
+                  <View key={`${item.id}-${itemIdx}`} style={[styles.rulerSegment, { width: segmentWidth }]}>
+                    <View style={styles.segmentStripesRow}>
+                      {Array.from({ length: ticksCount }).map((_, i) => {
+                        const isCenterTick = i === Math.floor(ticksCount / 2);
+                        const isMajorTick = i % 5 === 0;
+
+                        const randomPattern = [26, 38, 20, 42, 24, 46, 28, 36, 22, 34];
+                        const stripeHeight = isCenterTick ? 46 : isMajorTick ? 36 : randomPattern[i % randomPattern.length];
+
+                        return (
+                          <View key={i} style={[styles.stripeTickCell, { width: STRIPE_STEP }]}>
+                            <View
+                              style={[
+                                styles.fineStripe,
+                                {
+                                  backgroundColor: item.color,
+                                  height: stripeHeight,
+                                  opacity: isSelected ? 1 : 0.8,
+                                },
+                              ]}
+                            />
+                          </View>
+                        );
+                      })}
+                    </View>
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.rulerSegmentLabel, { color: isSelected ? item.color : theme.textMuted }]}
+                    >
+                      {item.title}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          </ScrollView>
+        </View>
 
         {/* Card Detail dengan Pattern Sejajar & Tanpa Kedip */}
         <AnimatedDetailCard
@@ -275,70 +326,18 @@ export function SavingsBalanceSection({
   );
 }
 
-function AnimatedItemBadge({ isSelected, bgColor, color, icon, renderIcon }: any) {
-  const scale = useSharedValue(isSelected ? 1.15 : 1);
-
-  useEffect(() => {
-    scale.value = withTiming(isSelected ? 1.15 : 1, {
-      duration: 180,
-      easing: Easing.out(Easing.quad),
-    });
-  }, [isSelected]);
-
-  const animStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  return (
-    <Animated.View style={[styles.iconBox, { backgroundColor: bgColor }, animStyle]}>
-      {renderIcon(icon, color)}
-    </Animated.View>
-  );
-}
-
-function AnimatedPointerPin({ isSelected, color }: any) {
-  const pinHeight = useSharedValue(isSelected ? 16 : 10);
-
-  useEffect(() => {
-    pinHeight.value = withTiming(isSelected ? 16 : 10, {
-      duration: 180,
-      easing: Easing.out(Easing.quad),
-    });
-  }, [isSelected]);
-
-  const animStyle = useAnimatedStyle(() => ({ height: pinHeight.value }));
-
-  return (
-    <Animated.View
-      style={[
-        styles.pointerPin,
-        { backgroundColor: isSelected ? color : 'rgba(0,0,0,0.2)' },
-        animStyle,
-      ]}
-    />
-  );
-}
-
 function AnimatedDetailCard({ selectedItem, isDark, theme, formatCurrency }: any) {
   const progressWidth = useSharedValue(0);
   const cardScale = useSharedValue(1);
-  const shadowOpacity = useSharedValue(0.04);
 
-  const percent = Math.min(
-    Math.round((selectedItem.currentAmount / selectedItem.targetAmount) * 100),
-    100
-  );
+  const percent = selectedItem.targetAmount > 0
+    ? Math.min(Math.round((selectedItem.currentAmount / selectedItem.targetAmount) * 100), 100)
+    : 100;
 
   useEffect(() => {
-    // Animasi bounce & shadow glow mulus saat berpindah item
     cardScale.value = withSequence(
       withSpring(1.02, { damping: 12, stiffness: 250 }),
       withSpring(1, { damping: 16, stiffness: 200 })
-    );
-
-    shadowOpacity.value = withSequence(
-      withTiming(0.18, { duration: 150 }),
-      withTiming(0.06, { duration: 350 })
     );
 
     progressWidth.value = 0;
@@ -350,85 +349,94 @@ function AnimatedDetailCard({ selectedItem, isDark, theme, formatCurrency }: any
 
   const cardAnimStyle = useAnimatedStyle(() => ({
     transform: [{ scale: cardScale.value }],
-    shadowOpacity: shadowOpacity.value,
   }));
 
   const progressAnimStyle = useAnimatedStyle(() => ({ width: `${progressWidth.value}%` }));
 
   const isDebt = selectedItem.type === 'debt';
   const isIncome = selectedItem.type === 'income';
-  const badgeBg = isDebt ? '#FDECEC' : isIncome ? '#E6F6EE' : '#E8F5E9';
-  const accentColor = isDebt
-    ? theme.expense
+
+  const badgeBg = selectedItem.bgColor;
+  const accentColor = selectedItem.color;
+
+  const leftLabel = isDebt
+    ? 'Telah Terbayar'
     : isIncome
-    ? theme.income
-    : '#2E7D32';
+      ? 'Pemasukan Bulan Ini'
+      : selectedItem.type === 'expense'
+        ? 'Total Pengeluaran'
+        : selectedItem.type === 'savings'
+          ? 'Estimasi Tabungan'
+          : 'Sisa Anggaran';
 
-  const badgeLabel = isDebt
-    ? 'Sisa Utang'
-    : isIncome
-    ? 'Pemasukan'
+  const rightLabel = isDebt
+    ? 'Total Utang'
     : selectedItem.type === 'expense'
-    ? 'Pengeluaran'
-    : selectedItem.type === 'savings'
-    ? 'Tabungan'
-    : 'Budget';
+      ? 'Batas Pemasukan'
+      : selectedItem.type === 'savings'
+        ? 'Total Saldo Utama'
+        : 'Total Pemasukan';
 
-  const footerLeftLabel = isDebt
-    ? 'Sisa'
-    : selectedItem.type === 'expense'
-    ? 'Terpakai'
-    : 'Tercatat';
-
-  const footerRightLabel = isDebt
-    ? 'Total'
-    : selectedItem.type === 'expense'
-    ? 'Budget'
-    : 'Target';
+  const showProgress = selectedItem.targetAmount > 0 && selectedItem.currentAmount !== selectedItem.targetAmount;
 
   return (
     <Animated.View
       style={[
         styles.detailCard,
         {
-          backgroundColor: isDark ? theme.surfaceMuted : '#F4F7F2',
-          borderColor: isDark ? theme.border : '#E2E9DE',
+          backgroundColor: isDark ? theme.surfaceMuted : '#FFFFFF',
+          borderColor: isDark ? theme.border : '#E2E8F0',
         },
         cardAnimStyle,
       ]}>
+      {/* Header Info */}
       <View style={styles.detailHeader}>
         <View style={styles.detailTitleRow}>
           <View style={[styles.typeBadge, { backgroundColor: badgeBg }]}>
             <Text style={[styles.typeBadgeText, { color: accentColor }]}>
-              {badgeLabel}
+              {selectedItem.title}
             </Text>
           </View>
-          <Text style={[styles.detailTitle, { color: theme.textPrimary }]}>{selectedItem.title}</Text>
         </View>
-        <Text style={[styles.detailPercent, { color: accentColor }]}>
-          {percent}%
-        </Text>
+        {showProgress ? (
+          <View style={[styles.percentPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#F1F5F9' }]}>
+            <Text style={[styles.detailPercent, { color: accentColor }]}>
+              {percent}%
+            </Text>
+          </View>
+        ) : null}
       </View>
 
-      {/* Progress Bar Track & Fill */}
-      <View style={[styles.detailProgressBarTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#E2E9DE' }]}>
-        <Animated.View
-          style={[
-            styles.detailProgressBarFill,
-            { backgroundColor: accentColor },
-            progressAnimStyle,
-          ]}
-        />
+      {/* Main Amounts Grid */}
+      <View style={styles.amountGridRow}>
+        <View style={styles.amountCol}>
+          <Text style={[styles.amountLabelText, { color: theme.textMuted }]}>{leftLabel}</Text>
+          <Text style={[styles.amountValueText, { color: theme.textPrimary }]}>
+            {formatCurrency(selectedItem.currentAmount)}
+          </Text>
+        </View>
+        {showProgress ? (
+          <View style={[styles.amountCol, styles.amountColRight]}>
+            <Text style={[styles.amountLabelText, { color: theme.textMuted }]}>{rightLabel}</Text>
+            <Text style={[styles.amountValueText, { color: theme.textPrimary }]}>
+              {formatCurrency(selectedItem.targetAmount)}
+            </Text>
+          </View>
+        ) : null}
       </View>
 
-      <View style={styles.detailFooter}>
-        <Text style={[styles.detailFooterText, { color: theme.textMuted }]}>
-          {footerLeftLabel}: <Text style={{ color: theme.textPrimary, fontWeight: '700' }}>{formatCurrency(selectedItem.currentAmount)}</Text>
-        </Text>
-        <Text style={[styles.detailFooterText, { color: theme.textMuted }]}>
-          {footerRightLabel}: <Text style={{ color: theme.textPrimary, fontWeight: '700' }}>{formatCurrency(selectedItem.targetAmount)}</Text>
-        </Text>
-      </View>
+      {/* Progress Bar Track */}
+      {showProgress ? (
+        <View style={[styles.detailProgressBarTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#F1F5F9' }]}>
+          <Animated.View
+            style={[
+              styles.detailProgressBarFill,
+              { backgroundColor: accentColor },
+              progressAnimStyle,
+            ]}
+          />
+        </View>
+      ) : null}
     </Animated.View>
   );
 }
@@ -502,63 +510,70 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   spectrumCardWrapper: {
-    marginHorizontal: -20,
     gap: 14,
   },
-  scrollableSpectrumContent: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-  meterContainer: {
-    width: 520,
-  },
-  iconBadgesRow: {
-    height: 52,
+  rulerContainer: {
     position: 'relative',
-    marginBottom: 4,
+    height: 150,
+    justifyContent: 'center',
   },
-  itemColumn: {
+  fixedCenterPointer: {
     position: 'absolute',
+    left: '50%',
+    top: 0,
+    marginTop: -15,
+    marginLeft: -16,
     alignItems: 'center',
-    bottom: 0,
-    zIndex: 2,
-    marginLeft: -19,
+    zIndex: 10,
+    pointerEvents: 'none',
   },
-  iconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
+  centerIconBadge: {
+    width: 42,
+    height: 42,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
   },
-  pointerPin: {
-    width: 2,
+  centerPointerPin: {
+    width: 3,
+    height: 18,
+    borderRadius: 1.5,
     marginTop: 3,
-    borderRadius: 1,
   },
-  stripesMeterWrapper: {
+  scrollableSpectrumContent: {
+    paddingHorizontal: 80,
+    paddingTop: 50,
+    paddingBottom: 8,
+  },
+  meterStripesContainer: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  rulerSegment: {
     alignItems: 'center',
-    justifyContent: 'space-between',
-    height: 31,
+    gap: 4,
+  },
+  segmentStripesRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     width: '100%',
+  },
+  stripeTickCell: {
+    alignItems: 'center',
+  },
+  rulerSegmentLabel: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   fineStripe: {
     width: 2,
-    height: 44,
     borderRadius: 1,
   },
   detailCard: {
-    marginHorizontal: 20,
     borderRadius: 24,
     borderWidth: 1,
-    padding: 16,
-    gap: 8,
+    padding: 18,
+    gap: 14,
   },
   detailHeader: {
     flexDirection: 'row',
@@ -571,21 +586,46 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   typeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
   },
   typeBadgeText: {
     fontSize: 11,
-    fontWeight: '700',
-  },
-  detailTitle: {
-    fontSize: 14,
     fontWeight: '800',
   },
+  detailTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  percentPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
   detailPercent: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '900',
+  },
+  amountGridRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+  },
+  amountCol: {
+    gap: 2,
+  },
+  amountColRight: {
+    alignItems: 'flex-end',
+  },
+  amountLabelText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  amountValueText: {
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: -0.3,
   },
   detailProgressBarTrack: {
     height: 8,
@@ -595,13 +635,5 @@ const styles = StyleSheet.create({
   detailProgressBarFill: {
     height: '100%',
     borderRadius: 4,
-  },
-  detailFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  detailFooterText: {
-    fontSize: 12,
   },
 });

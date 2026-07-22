@@ -9,21 +9,23 @@ import Animated, {
   withTiming,
   withSpring,
 } from 'react-native-reanimated';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { ScreenWrapper } from '@/components/common/screen-wrapper';
 import { PinDots } from '@/components/ui/pin-dots';
 import { PinPad } from '@/components/ui/pin-pad';
 import { StatusModal } from '@/components/ui/status-modal';
 import { getTheme } from '@/core/theme/colors';
-import { savePin } from '@/core/lib/pin-storage';
+import { savePin, verifyPin } from '@/core/lib/pin-storage';
 
 const PIN_LENGTH = 6;
 
 export function SetupPinScreen() {
   const colorScheme = useColorScheme();
   const theme = getTheme(colorScheme);
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
+  const isChange = mode === 'change';
 
-  const [step, setStep] = useState<'create' | 'confirm'>('create');
+  const [step, setStep] = useState<'old' | 'create' | 'confirm'>(isChange ? 'old' : 'create');
   const [firstPin, setFirstPin] = useState('');
   const [pin, setPin] = useState('');
   const [loading, setLoading] = useState(false);
@@ -42,13 +44,13 @@ export function SetupPinScreen() {
   }));
 
   const triggerShake = () => {
-    shakeX.value = withSequence(
+    shakeX.set(withSequence(
       withTiming(-12, { duration: 60 }),
       withTiming(12, { duration: 60 }),
       withTiming(-10, { duration: 60 }),
       withTiming(10, { duration: 60 }),
       withSpring(0, { damping: 14 })
-    );
+    ));
   };
 
   const handleDigit = (digit: string) => {
@@ -66,7 +68,35 @@ export function SetupPinScreen() {
   };
 
   const handleComplete = async (completed: string) => {
-    if (step === 'create') {
+    if (step === 'old') {
+      setLoading(true);
+      try {
+        if (await verifyPin(completed)) {
+          setPin('');
+          setStep('create');
+        } else {
+          triggerShake();
+          setPin('');
+          setModalState({
+            visible: true,
+            type: 'error',
+            title: 'PIN Lama Salah',
+            message: 'PIN lama yang Anda masukkan tidak sesuai.',
+            onConfirm: () => setModalState((prev) => ({ ...prev, visible: false })),
+          });
+        }
+      } catch {
+        setModalState({
+          visible: true,
+          type: 'error',
+          title: 'Terjadi Kesalahan',
+          message: 'Gagal memverifikasi PIN lama. Silakan coba lagi.',
+          onConfirm: () => setModalState((prev) => ({ ...prev, visible: false })),
+        });
+      } finally {
+        setLoading(false);
+      }
+    } else if (step === 'create') {
       setFirstPin(completed);
       setPin('');
       setStep('confirm');
@@ -90,12 +120,10 @@ export function SetupPinScreen() {
         return;
       }
 
-      // Save PIN
-      setLoading(true);
-      try {
-        await savePin(completed);
-        // Navigate to biometric suggestion
-        router.replace('/setup-biometric');
+        setLoading(true);
+        try {
+          await savePin(completed);
+          router.replace(isChange ? '/(main)' : '/setup-biometric');
       } catch {
         setModalState({
           visible: true,
@@ -110,9 +138,10 @@ export function SetupPinScreen() {
     }
   };
 
-  const title = step === 'create' ? 'Buat PIN Baru' : 'Konfirmasi PIN';
-  const subtitle =
-    step === 'create'
+  const title = step === 'old' ? 'Masukkan PIN Lama' : step === 'create' ? 'Buat PIN Baru' : 'Konfirmasi PIN';
+  const subtitle = step === 'old'
+    ? 'Verifikasi PIN lama Anda sebelum membuat PIN baru.'
+    : step === 'create'
       ? 'Buat 6 digit PIN untuk keamanan akun Anda.'
       : 'Masukkan ulang PIN yang sama untuk konfirmasi.';
 
@@ -123,7 +152,8 @@ export function SetupPinScreen() {
         {/* Step indicator dots */}
         <View style={styles.stepIndicator}>
           <View style={[styles.stepDot, { backgroundColor: theme.primary }]} />
-          <View style={[styles.stepDot, step === 'confirm'
+            <View style={[styles.stepDot, step !== 'old' && step === 'confirm'
+
             ? { backgroundColor: theme.primary }
             : { backgroundColor: '#E5E7EB' }]} />
         </View>

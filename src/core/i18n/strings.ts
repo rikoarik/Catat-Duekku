@@ -176,6 +176,53 @@ const strings = {
       step10Title: 'Pengaturan Bahasa & Tema',
       step10Desc: 'Sesuaikan mode tampilan terang/gelap dan pilih bahasa favorit Anda (Indonesia / English).',
     },
+    scan: {
+      headerTitle: 'Pindai Dengan AI',
+      extractFailedTitle: 'Ekstraksi Gagal',
+      extractFailedMessage: 'Ekstraksi struk tidak tersedia.',
+      saveSuccessTitle: 'Pengeluaran Dicatat!',
+      saveFailedTitle: 'Gagal Menyimpan',
+      invalidAmountTitle: 'Nominal Tidak Valid',
+      invalidAmountMessage: 'Nominal pengeluaran harus lebih dari Rp 0.',
+      accountRequiredTitle: 'Akun Belum Dipilih',
+      accountRequiredMessage: 'Silakan pilih akun pembayaran.',
+      galleryErrorTitle: 'Error Galeri',
+      galleryPermissionTitle: 'Izin Galeri',
+      galleryPermissionMessage: 'Aplikasi membutuhkan akses galeri.',
+      cameraSnapFailed: 'Kamera tidak menghasilkan foto.',
+      cameraSnapErrorTitle: 'Gagal Mengambil Foto',
+      btnDone: 'Selesai',
+      btnTryAgain: 'Coba Lagi',
+      unsupportedIntentTitle: 'Hasil Belum Didukung',
+      unsupportedIntentMessage: 'Intent ini memerlukan alur konfirmasi khusus dan tidak disimpan.',
+      loadAccountFailed: 'Gagal Memuat Akun',
+      loadAccountFailedFallback: 'Tidak dapat memuat daftar akun.',
+      hudAutoDetect: 'AUTO DETECT AKTIF',
+      hudManualMode: 'MODE MANUAL',
+      galleryLabel: 'Galeri',
+      targetDetectedTitle: 'Dokumen TERDETEKSI!',
+      targetDetectedSub: 'Mengambil foto otomatis...',
+      cameraPermTitle: 'Izin Kamera Diperlukan',
+      cameraPermSub: 'Aktifkan kamera untuk pemindaian dokumen otomatis berbasis AI',
+      cameraPermBtn: 'Izinkan Akses Kamera',
+      scanningTitle: 'Mengekstrak Data Dokumen...',
+      scanningSub: 'AI sedang membaca nominal, tanggal, dan nama toko',
+      photoBadge: 'Foto Terlampir',
+      resultTitle: 'Hasil Pemindaian AI',
+      retakeBtn: 'Foto Ulang',
+      amountLabel: 'Nominal Transaksi (Rp)',
+      merchantLabel: 'Toko / Merchant',
+      categoryLabel: 'Kategori',
+      paymentSourceLabel: 'Sumber Pembayaran',
+      selectAccount: 'Pilih Akun',
+      noteLabel: 'Catatan Opsional',
+      savingBtn: 'Menyimpan...',
+      saveBtn: 'Simpan Transaksi',
+      rescanBtn: 'Pindai Ulang',
+      defaultDescription: 'Transaksi',
+      genericError: 'Terjadi kesalahan sistem.',
+      saveSuccessMessage: 'Nominal berhasil tersimpan.',
+    },
   },
   en: {
     common: {
@@ -356,149 +403,63 @@ const strings = {
       step10Title: 'Language & Theme',
       step10Desc: 'Switch light/dark visual themes and select your preferred language (ID / EN).',
     },
+    scan: {
+      headerTitle: 'AI Receipt Scanner',
+      extractFailedTitle: 'Extraction Failed',
+      extractFailedMessage: 'Receipt extraction is unavailable.',
+      saveSuccessTitle: 'Expense Saved!',
+      saveFailedTitle: 'Save Failed',
+      invalidAmountTitle: 'Invalid Amount',
+      invalidAmountMessage: 'Expense amount must be greater than 0.',
+      accountRequiredTitle: 'Account Required',
+      accountRequiredMessage: 'Please select a payment account.',
+      galleryErrorTitle: 'Gallery Error',
+      galleryPermissionTitle: 'Gallery Permission',
+      galleryPermissionMessage: 'App requires photo library permission.',
+      cameraSnapFailed: 'Camera failed to capture photo.',
+      cameraSnapErrorTitle: 'Capture Failed',
+      btnDone: 'Done',
+      btnTryAgain: 'Try Again',
+      unsupportedIntentTitle: 'Unsupported Result',
+      unsupportedIntentMessage: 'This intent requires a special confirmation flow and was not saved.',
+      loadAccountFailed: 'Failed to Load Accounts',
+      loadAccountFailedFallback: 'Unable to load the account list.',
+      hudAutoDetect: 'AUTO DETECT ACTIVE',
+      hudManualMode: 'MANUAL SCAN MODE',
+      galleryLabel: 'Gallery',
+      targetDetectedTitle: 'RECEIPT DETECTED!',
+      targetDetectedSub: 'Capturing photo automatically...',
+      cameraPermTitle: 'Camera Permission Required',
+      cameraPermSub: 'Enable camera for AI-powered automatic receipt scanning',
+      cameraPermBtn: 'Allow Camera Access',
+      scanningTitle: 'Extracting Receipt Data...',
+      scanningSub: 'AI is reading the amount, date, and store name',
+      photoBadge: 'Photo Attached',
+      resultTitle: 'AI Scan Result',
+      retakeBtn: 'Retake Photo',
+      amountLabel: 'Transaction Amount (Rp)',
+      merchantLabel: 'Store / Merchant',
+      categoryLabel: 'Category',
+      paymentSourceLabel: 'Payment Source',
+      selectAccount: 'Select Account',
+      noteLabel: 'Optional Note',
+      savingBtn: 'Saving...',
+      saveBtn: 'Save Transaction',
+      rescanBtn: 'Rescan',
+      defaultDescription: 'Receipt transaction',
+      genericError: 'A system error occurred.',
+      saveSuccessMessage: 'Amount saved successfully.',
+    },
   },
 } as const;
 
-export type StringKey =
-  | 'common.appName'
-  | 'common.continue'
-  | 'common.understand'
-  | 'common.tryAgain'
-  | 'common.save'
-  | 'common.edit'
-  | 'common.syncNow'
-  | 'common.reset'
-  | 'common.cancel'
-  | 'dashboard.fallbackUserName'
-  | 'dashboard.greetingHello'
-  | 'dashboard.greetingWelcome'
-  | 'dashboard.walletTitle'
-  | 'dashboard.walletDescription'
-  | 'dashboard.analyticsTitle'
-  | 'dashboard.analyticsDescription'
-  | 'dashboard.profileTitle'
-  | 'dashboard.profileDescription'
-  | 'dashboard.balanceLabel'
-  | 'dashboard.quickExpenseTitle'
-  | 'dashboard.quickManual'
-  | 'dashboard.insightTag'
-  | 'dashboard.insightToday'
-  | 'dashboard.insightDefault'
-  | 'dashboard.spectrumPemasukan'
-  | 'dashboard.spectrumPengeluaran'
-  | 'dashboard.spectrumTabungan'
-  | 'dashboard.spectrumUtang'
-  | 'dashboard.spectrumBudget'
-  | 'auth.welcomeBack'
-  | 'auth.createAccount'
-  | 'auth.loginSubtitle'
-  | 'auth.registerSubtitle'
-  | 'auth.tabLogin'
-  | 'auth.tabRegister'
-  | 'auth.fullNameLabel'
-  | 'auth.fullNamePlaceholder'
-  | 'auth.emailLabel'
-  | 'auth.emailPlaceholder'
-  | 'auth.passwordLabel'
-  | 'auth.rememberMe'
-  | 'auth.forgotPassword'
-  | 'auth.socialDivider'
-  | 'auth.socialGoogle'
-  | 'auth.socialApple'
-  | 'auth.continueWithFacebook'
-  | 'auth.loginSuccessTitle'
-  | 'auth.loginSuccessMessage'
-  | 'auth.registerSuccessTitle'
-  | 'auth.registerSuccessMessage'
-  | 'auth.loginFailedTitle'
-  | 'auth.loginFailedMessage'
-  | 'auth.registerFailedTitle'
-  | 'auth.registerFailedMessage'
-  | 'auth.genericErrorMessage'
-  | 'auth.inputIncompleteTitle'
-  | 'auth.inputIncompleteLogin'
-  | 'auth.inputIncompleteRegister'
-  | 'auth.genericErrorTitle'
-  | 'auth.biometricPrompt'
-  | 'auth.enterApp'
-  | 'profile.title'
-  | 'profile.sectionProfile'
-  | 'profile.sectionSecurity'
-  | 'profile.sectionPreferences'
-  | 'profile.sectionData'
-  | 'profile.editProfileLabel'
-  | 'profile.editProfileDescription'
-  | 'profile.pinLockLabel'
-  | 'profile.pinLockDescription'
-  | 'profile.biometricLabel'
-  | 'profile.biometricDescription'
-  | 'profile.biometricUnsupported'
-  | 'profile.changePinLabel'
-  | 'profile.changePinDescription'
-  | 'profile.timezoneLabel'
-  | 'profile.timezoneDescription'
-  | 'profile.appearanceLabel'
-  | 'profile.appearanceDescription'
-  | 'profile.appearanceDark'
-  | 'profile.appearanceLight'
-  | 'profile.languageLabel'
-  | 'profile.languageDescription'
-  | 'profile.languageIndonesian'
-  | 'profile.languageEnglish'
-  | 'profile.resyncLabel'
-  | 'profile.resyncDescription'
-  | 'profile.resetLabel'
-  | 'profile.resetDescription'
-  | 'profile.logoutLabel'
-  | 'profile.cloudSyncActive'
-  | 'profile.defaultUserName'
-  | 'profile.defaultEmail'
-  | 'profile.syncSuccessTitle'
-  | 'profile.syncSuccessMessage'
-  | 'profile.disablePinTitle'
-  | 'profile.disablePinMessage'
-  | 'profile.disablePinConfirm'
-  | 'profile.pinDisabledTitle'
-  | 'profile.pinDisabledMessage'
-  | 'profile.pinRequiredTitle'
-  | 'profile.pinRequiredMessage'
-  | 'profile.setupPinNow'
-  | 'profile.biometricPrompt'
-  | 'profile.biometricEnabledTitle'
-  | 'profile.biometricEnabledMessage'
-  | 'profile.resetDataTitle'
-  | 'profile.resetDataMessage'
-  | 'profile.resetDataConfirm'
-  | 'profile.dataResetTitle'
-  | 'profile.dataResetMessage'
-  | 'profile.logoutTitle'
-  | 'profile.logoutMessage'
-  | 'profile.logoutConfirm'
-  | 'profile.editTitle'
-  | 'profile.editSubtitle'
-  | 'profile.fullNameLabel'
-  | 'profile.fullNamePlaceholder'
-  | 'profile.emailReadOnlyLabel'
-  | 'profile.saveChanges'
-  | 'profile.saving'
-  | 'profile.editInputIncompleteTitle'
-  | 'profile.editInputIncompleteMessage'
-  | 'profile.editFailedTitle'
-  | 'profile.editSuccessTitle'
-  | 'profile.editSuccessMessage'
-  | 'profile.genericError'
-  | 'onboarding.skip'
-  | 'onboarding.next'
-  | 'onboarding.enableNotificationsAndStart'
-  | 'onboarding.step1Title'
-  | 'onboarding.step1Subtitle'
-  | 'onboarding.step1Description'
-  | 'onboarding.step2Title'
-  | 'onboarding.step2Subtitle'
-  | 'onboarding.step2Description'
-  | 'onboarding.step3Title'
-  | 'onboarding.step3Subtitle'
-  | 'onboarding.step3Description';
+type SubKeys<T> = {
+  [K in keyof T]: K extends string
+    ? { [P in keyof T[K]]: P extends string ? `${K}.${P}` : never }[keyof T[K]]
+    : never;
+}[keyof T];
+
+export type StringKey = SubKeys<typeof strings.id> | (string & {});
 
 export function t(key: StringKey, lang: 'id' | 'en' = 'id'): string {
   const dict = strings[lang] || strings.id;

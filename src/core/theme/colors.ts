@@ -87,5 +87,5 @@ export const Colors = {
 export type ThemeColors = typeof Colors.light | typeof Colors.dark;
 
 export function getTheme(colorScheme?: string | null): ThemeColors {
-  return colorScheme === 'dark' ? Colors.dark : Colors.light;
+  return Colors.light;
 }

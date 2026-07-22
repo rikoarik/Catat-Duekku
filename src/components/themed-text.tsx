@@ -1,6 +1,5 @@
 import { Text } from '@/components/ui/text';
 import { Platform, StyleSheet, type TextProps } from 'react-native';
-;
 
 import { Fonts, ThemeColor } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -23,7 +22,7 @@ export function ThemedText({ style, type = 'default', themeColor, ...rest }: The
         type === 'smallBold' && styles.smallBold,
         type === 'subtitle' && styles.subtitle,
         type === 'link' && styles.link,
-        type === 'linkPrimary' && styles.linkPrimary,
+        type === 'linkPrimary' && [styles.linkPrimary, { color: theme.tint }],
         type === 'code' && styles.code,
         style,
       ]}
@@ -31,6 +30,8 @@ export function ThemedText({ style, type = 'default', themeColor, ...rest }: The
     />
   );
 }
+
+// ponytail: keep this legacy wrapper for starter/web screens until they are migrated to the shared UI primitives.
 
 const styles = StyleSheet.create({
   small: {

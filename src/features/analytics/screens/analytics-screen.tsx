@@ -5,6 +5,8 @@ import {
   TouchableOpacity,
   useColorScheme,
   Dimensions,
+  Modal,
+  ActivityIndicator,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Text } from '@/components/ui/text';
@@ -23,11 +25,11 @@ import Animated, {
   interpolate,
   Extrapolate,
 } from 'react-native-reanimated';
-import { ArrowUp, ArrowDown, TrendUp, CpuCharge } from 'iconsax-react-native';
+import { ArrowUp, ArrowDown, TrendUp, CpuCharge, ArrowDown2, TickCircle } from 'iconsax-react-native';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 import { getTheme } from '@/core/theme/colors';
 import { formatCurrency } from '@/core/utils/formatters';
-import { financeStore } from '@/core/lib/finance-store';
+import { edgeApi, type AnalyticsOverview } from '@/core/lib/edge-api';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
@@ -46,7 +48,7 @@ const CATEGORY_COLORS = ['#D65B5B', '#23835B', '#B87912', '#3B82F6', '#8B5CF6', 
 type CategorySlice = { label: string; amount: number; pct: number; color: string };
 type StatItem = { label: string; value: string; sub: string; color: string };
 
-const monthKey = (date: Date) => `${date.getFullYear()}-${date.getMonth()}`;
+const monthKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
 function buildMonthBuckets(anchor = new Date()) {
   return Array.from({ length: 7 }, (_, index) => {
@@ -91,7 +93,8 @@ function normalizeData(data: number[], height: number) {
   'worklet';
   const min = Math.min(...data) * 0.9;
   const max = Math.max(...data) * 1.05;
-  return data.map((val) => height - ((val - min) / (max - min)) * height);
+  const range = max - min;
+  return range === 0 ? data.map(() => height / 2) : data.map((val) => height - ((val - min) / range) * height);
 }
 
 function buildSmoothPath(data: number[], width: number, height: number): string {
@@ -273,35 +276,32 @@ export function AnalyticsScreen() {
   const isDark = colorScheme === 'dark';
 
   const [activeTab, setActiveTab] = useState<'arus-kas' | 'tabungan' | 'kategori'>('kategori');
-  const [version, setVersion] = useState(0);
+  const [server, setServer] = useState<AnalyticsOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const [period, setPeriod] = useState<'7m' | '3m' | '1m'>('7m');
+  const [periodModalOpen, setPeriodModalOpen] = useState(false);
+
+  const PERIOD_OPTIONS: { key: '7m' | '3m' | '1m'; label: string; monthsCount: number }[] = [
+    { key: '7m', label: '7 bulan', monthsCount: 7 },
+    { key: '3m', label: '3 bulan', monthsCount: 3 },
+    { key: '1m', label: '1 bulan', monthsCount: 1 },
+  ];
+
+  const currentPeriodLabel = PERIOD_OPTIONS.find((p) => p.key === period)?.label ?? '7 bulan';
+  const filterMonthsCount = PERIOD_OPTIONS.find((p) => p.key === period)?.monthsCount ?? 7;
 
   useEffect(() => {
-    const unsubscribe = financeStore.subscribe(() => setVersion((value) => value + 1));
-    return unsubscribe;
-  }, []);
+    setLoading(true);
+    setError('');
+    edgeApi.analytics(period).then(({ data }) => setServer(data)).catch((cause) => {
+      setError(cause instanceof Error ? cause.message : 'Gagal memuat analitik.');
+    }).finally(() => setLoading(false));
+  }, [period]);
 
-  const transactions = useMemo(() => financeStore.getTransactions(), [version]);
-
-  const today = useMemo(() => new Date(), []);
-  const currentMonth = today.getMonth();
-  const currentYear = today.getFullYear();
-  const currentMonthKey = `${currentYear}-${currentMonth}`;
-
-  const monthBuckets = useMemo(() => {
-    const buckets = buildMonthBuckets(today);
-    transactions.forEach((tx) => {
-      const date = new Date(tx.occurredAt);
-      if (Number.isNaN(date.getTime())) return;
-      if (date.getFullYear() !== currentYear) return;
-      const key = monthKey(date);
-      const bucket = buckets.find((b) => b.key === key);
-      if (!bucket) return;
-      const amount = Math.abs(tx.amount);
-      if (tx.type === 'EXPENSE') bucket.expense += amount;
-      else if (tx.type === 'INCOME') bucket.income += amount;
-    });
-    return buckets;
-  }, [transactions, currentMonth, currentYear]);
+  const fullMonthBuckets = server?.monthly_buckets.map((bucket) => ({ key: bucket.month, label: bucket.label, income: bucket.income, expense: bucket.expense })) ?? [];
+  const monthBuckets = fullMonthBuckets.slice(-filterMonthsCount);
 
   const currentBucket = monthBuckets[monthBuckets.length - 1];
   const previousBucket = monthBuckets[monthBuckets.length - 2];
@@ -310,34 +310,12 @@ export function AnalyticsScreen() {
   const expenseSeries = monthBuckets.map((b) => b.expense);
   const netSavingsSeries = monthBuckets.map((b) => b.income - b.expense);
 
-  const incomeDeltaLabel = getDeltaLabel(currentBucket.income, previousBucket.income);
-  const expenseDeltaLabel = getDeltaLabel(currentBucket.expense, previousBucket.expense);
-  const netSavings = currentBucket.income - currentBucket.expense;
-  const monthLabel = `${MONTH_NAMES[currentMonth]} ${currentYear}`;
-
-  const categorySlices = useMemo<CategorySlice[]>(() => {
-    const totals = new Map<string, number>();
-    transactions.forEach((tx) => {
-      if (tx.type !== 'EXPENSE') return;
-      const date = new Date(tx.occurredAt);
-      if (Number.isNaN(date.getTime())) return;
-      if (date.getMonth() !== currentMonth || date.getFullYear() !== currentYear) return;
-      const label = tx.categoryName || 'Lain-lain';
-      totals.set(label, (totals.get(label) ?? 0) + Math.abs(tx.amount));
-    });
-    const totalExpenseThisMonth = Array.from(totals.values()).reduce((sum, v) => sum + v, 0);
-    const sorted = Array.from(totals.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6);
-    return sorted.map(([label, amount], index) => ({
-      label,
-      amount,
-      pct: totalExpenseThisMonth === 0 ? 0 : Math.round((amount / totalExpenseThisMonth) * 100),
-      color: CATEGORY_COLORS[index % CATEGORY_COLORS.length],
-    }));
-  }, [transactions, currentMonth, currentYear]);
-
-  const hasTransactions = transactions.length > 0;
+  const incomeDeltaLabel = getDeltaLabel(currentBucket?.income ?? 0, previousBucket?.income ?? 0);
+  const expenseDeltaLabel = getDeltaLabel(currentBucket?.expense ?? 0, previousBucket?.expense ?? 0);
+  const netSavings = (currentBucket?.income ?? 0) - (currentBucket?.expense ?? 0);
+  const monthLabel = server?.month_label ?? '';
+  const categorySlices = server?.category_slices.map((slice) => ({ label: slice.label, amount: slice.amount, pct: slice.percentage, color: slice.color })) ?? [];
+  const hasTransactions = server?.monthly_buckets.some((bucket) => bucket.income !== 0 || bucket.expense !== 0) ?? false;
 
   const incomePath = buildSmoothPath(incomeSeries, CHART_WIDTH, CHART_HEIGHT);
   const expensePath = buildSmoothPath(expenseSeries, CHART_WIDTH, CHART_HEIGHT);
@@ -350,132 +328,138 @@ export function AnalyticsScreen() {
   const GAP_DEG = 3;
   const arcs = (() => {
     const total = categorySlices.reduce((sum, c) => sum + c.pct, 0) || 1;
-    let cumAngle = 0;
-    return categorySlices.map((cat) => {
-      const sweep = (cat.pct / total) * 360 - GAP_DEG;
-      const start = cumAngle;
-      cumAngle += (cat.pct / total) * 360;
-      return { ...cat, startAngle: start, endAngle: start + sweep };
+    return categorySlices.map((cat, index) => {
+      const start = categorySlices.slice(0, index).reduce((sum, item) => sum + item.pct / total * 360, 0);
+      return { ...cat, startAngle: start, endAngle: start + cat.pct / total * 360 - GAP_DEG };
     });
   })();
 
-  const quickStats = useMemo<StatItem[]>(() => {
-    if (!hasTransactions) return [];
-    const expenseTxs = transactions.filter((tx) => tx.type === 'EXPENSE' && tx.occurredAt.startsWith(currentMonthKey));
-    const totalsByWeekday = new Map<number, number>();
-    const totalsByWeek = new Map<number, number>();
-    let topCategory = { label: '-', amount: 0 };
-    expenseTxs.forEach((tx) => {
-      const date = new Date(tx.occurredAt);
-      if (Number.isNaN(date.getTime())) return;
-      const amount = Math.abs(tx.amount);
-      totalsByWeekday.set(date.getDay(), (totalsByWeekday.get(date.getDay()) ?? 0) + amount);
-      const week = Math.ceil(date.getDate() / 7);
-      totalsByWeek.set(week, (totalsByWeek.get(week) ?? 0) + amount);
-      const label = tx.categoryName || 'Lain-lain';
-      if (amount > topCategory.amount) topCategory = { label, amount };
-    });
+  const quickStats: StatItem[] = server ? [
+    server.quick_stats.busiest_weekday && { label: 'Hari Tersibuk', value: server.quick_stats.busiest_weekday, sub: '', color: '#D65B5B' },
+    server.quick_stats.largest_category && { label: 'Kategori Terbesar', value: server.quick_stats.largest_category, sub: '', color: CATEGORY_COLORS[0] },
+    server.quick_stats.quietest_week && { label: 'Minggu Paling Hemat', value: `Minggu ${server.quick_stats.quietest_week}`, sub: '', color: '#23835B' },
+    { label: 'Transaksi Tercatat', value: String(server.quick_stats.expense_transaction_count), sub: 'pengeluaran bulan ini', color: '#0F3D3E' },
+  ].filter(Boolean) as StatItem[] : [];
+  const insightMessage = server?.insight ?? '';
 
-    const busiest = Array.from(totalsByWeekday.entries()).sort((a, b) => b[1] - a[1])[0];
-    const quietest = Array.from(totalsByWeek.entries()).sort((a, b) => a[1] - b[1])[0];
+  const renderPeriodModal = () => (
+    <Modal transparent visible={periodModalOpen} animationType="fade" onRequestClose={() => setPeriodModalOpen(false)}>
+      <TouchableOpacity activeOpacity={1} style={styles.modalBackdrop} onPress={() => setPeriodModalOpen(false)}>
+        <View style={[styles.periodModalCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <Text style={[styles.periodModalTitle, { color: theme.textPrimary }]} weight="bold">
+            Pilih Rentang Waktu
+          </Text>
+          <View style={styles.periodOptionsList}>
+            {PERIOD_OPTIONS.map((item) => {
+              const isSelected = period === item.key;
+              return (
+                <TouchableOpacity
+                  key={item.key}
+                  activeOpacity={0.7}
+                  style={[
+                    styles.periodOptionItem,
+                    {
+                      backgroundColor: isSelected ? theme.surfaceElement : theme.backgroundSecondary,
+                      borderColor: isSelected ? theme.primary : theme.border,
+                    },
+                  ]}
+                  onPress={() => {
+                    setPeriod(item.key);
+                    setPeriodModalOpen(false);
+                  }}
+                >
+                  <Text style={[styles.periodOptionText, { color: theme.textPrimary }]} weight={isSelected ? 'bold' : 'medium'}>
+                    {item.label}
+                  </Text>
+                  {isSelected && <TickCircle color={theme.primary} size={20} variant="Bold" />}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
 
-    const totalExpenseThisMonth = expenseTxs.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
-    const topCategoryPct = topCategory.amount > 0 ? Math.round((topCategory.amount / totalExpenseThisMonth) * 100) : 0;
+  const renderHeader = () => (
+    <Animated.View entering={FadeInDown.duration(350)} style={styles.headerRow}>
+      <View>
+        <Text style={[styles.screenTitle, { color: theme.textPrimary }]}>Analitik</Text>
+        <Text style={[styles.screenSubtitle, { color: theme.textMuted }]}>{monthLabel}</Text>
+      </View>
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={() => setPeriodModalOpen(true)}
+        style={[styles.periodBadge, { backgroundColor: isDark ? theme.surfaceMuted : '#F1F5F9' }]}
+      >
+        <Text style={[styles.periodText, { color: theme.primary }]}>{currentPeriodLabel}</Text>
+        <ArrowDown2 color={theme.primary} size={14} variant="Bold" />
+      </TouchableOpacity>
+    </Animated.View>
+  );
 
-    const stats: StatItem[] = [];
-    if (busiest) {
-      stats.push({
-        label: 'Hari Tersibuk',
-        value: WEEKDAY_NAMES[busiest[0]],
-        sub: formatCurrency(busiest[1]),
-        color: '#D65B5B',
-      });
-    }
-    if (topCategory.amount > 0) {
-      stats.push({
-        label: 'Kategori Terbesar',
-        value: topCategory.label,
-        sub: `${topCategoryPct}% dari pengeluaran`,
-        color: CATEGORY_COLORS[0],
-      });
-    }
-    if (quietest && totalsByWeek.size > 1) {
-      stats.push({
-        label: 'Minggu Paling Hemat',
-        value: `Minggu ${quietest[0]}`,
-        sub: formatCurrency(quietest[1]),
-        color: '#23835B',
-      });
-    }
-    stats.push({
-      label: 'Transaksi Tercatat',
-      value: String(expenseTxs.length),
-      sub: 'pengeluaran bulan ini',
-      color: '#0F3D3E',
-    });
-    return stats.slice(0, 4);
-  }, [transactions, currentMonthKey, hasTransactions, currentMonth, currentYear]);
-
-  const insightMessage = useMemo(() => {
-    if (categorySlices.length === 0) return '';
-    const top = categorySlices[0];
-    const previousTop = previousBucket.expense === 0 ? 0 : Math.round(((currentBucket.expense - previousBucket.expense) / previousBucket.expense) * 100);
-    const direction = currentBucket.expense === previousBucket.expense
-      ? 'stabil'
-      : currentBucket.expense < previousBucket.expense
-        ? 'turun'
-        : 'naik';
-    const topShare = top.pct;
-    const formattedChange = previousBucket.expense === 0
-      ? `${direction} ${formatCurrency(currentBucket.expense)}`
-      : `${direction} ${Math.abs(previousTop)}%`;
-    return `${monthLabel}: pengeluaran ${formattedChange} dari bulan lalu. Kategori terbesar adalah “${top.label}” (${topShare}% dari total).`;
-  }, [categorySlices, currentBucket.expense, previousBucket.expense, monthLabel]);
-
-  if (!hasTransactions) {
+  if (loading) {
     return (
       <KeyboardAwareScrollView
         enableOnAndroid
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scrollContent, styles.emptyContent]}
       >
-        <Animated.View entering={FadeInDown.duration(350)} style={styles.headerRow}>
-          <View>
-            <Text style={[styles.screenTitle, { color: theme.textPrimary }]}>Analitik</Text>
-            <Text style={[styles.screenSubtitle, { color: theme.textMuted }]}>{monthLabel}</Text>
-          </View>
-          <View style={[styles.periodBadge, { backgroundColor: isDark ? theme.surfaceMuted : '#F1F5F9' }]}>
-            <Text style={[styles.periodText, { color: theme.textSecondary }]}>7 bulan</Text>
-          </View>
-        </Animated.View>
-
-        <Animated.View entering={FadeInDown.delay(60).duration(350)} style={styles.emptyState}>
-          <View style={[styles.emptyIcon, { backgroundColor: theme.accentSoft }]}>
-            <TrendUp color={theme.accentText} size={26} variant="Bold" />
-          </View>
-          <Text style={[styles.emptyTitle, { color: theme.textPrimary }]}>Belum ada analitik</Text>
-          <Text style={[styles.emptyText, { color: theme.textMuted }]}>Catat beberapa transaksi terlebih dahulu. Ringkasan pemasukan, pengeluaran, dan kategori akan muncul di sini.</Text>
-        </Animated.View>
+        {renderHeader()}
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.primary} />
+        </View>
+        {renderPeriodModal()}
       </KeyboardAwareScrollView>
+    );
+  }
+  if (error && !server) {
+    return (
+      <KeyboardAwareScrollView
+        enableOnAndroid
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.scrollContent, styles.emptyContent]}
+      >
+        {renderHeader()}
+        <View style={styles.emptyState}>
+          <Text style={{ color: theme.expense }}>{error}</Text>
+        </View>
+        {renderPeriodModal()}
+      </KeyboardAwareScrollView>
+    );
+  }
+  if (!hasTransactions) {
+    return (
+      <>
+        <KeyboardAwareScrollView
+          enableOnAndroid
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[styles.scrollContent, styles.emptyContent]}
+        >
+          {renderHeader()}
+
+          <Animated.View entering={FadeInDown.delay(60).duration(350)} style={styles.emptyState}>
+            <View style={[styles.emptyIcon, { backgroundColor: theme.accentSoft }]}>
+              <TrendUp color={theme.accentText} size={26} variant="Bold" />
+            </View>
+            <Text style={[styles.emptyTitle, { color: theme.textPrimary }]}>Belum ada analitik</Text>
+            <Text style={[styles.emptyText, { color: theme.textMuted }]}>Catat beberapa transaksi terlebih dahulu. Ringkasan pemasukan, pengeluaran, dan kategori akan muncul di sini.</Text>
+          </Animated.View>
+        </KeyboardAwareScrollView>
+        {renderPeriodModal()}
+      </>
     );
   }
 
   return (
-    <KeyboardAwareScrollView
-      enableOnAndroid
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.scrollContent}
-    >
-      {/* ── Header ── */}
-      <Animated.View entering={FadeInDown.duration(350)} style={styles.headerRow}>
-        <View>
-          <Text style={[styles.screenTitle, { color: theme.textPrimary }]}>Analitik</Text>
-          <Text style={[styles.screenSubtitle, { color: theme.textMuted }]}>{monthLabel}</Text>
-        </View>
-        <View style={[styles.periodBadge, { backgroundColor: isDark ? theme.surfaceMuted : '#F1F5F9' }]}>
-          <Text style={[styles.periodText, { color: theme.textSecondary }]}>7 bulan</Text>
-        </View>
-      </Animated.View>
+    <>
+      <KeyboardAwareScrollView
+        enableOnAndroid
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        {/* ── Header ── */}
+        {renderHeader()}
 
       {/* ── Summary KPI Cards ── */}
       <Animated.View entering={FadeInDown.delay(60).duration(350)} style={styles.kpiRow}>
@@ -713,6 +697,8 @@ export function AnalyticsScreen() {
       ) : null}
 
     </KeyboardAwareScrollView>
+      {renderPeriodModal()}
+    </>
   );
 }
 
@@ -732,6 +718,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     paddingBottom: 80,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minHeight: 300,
   },
   emptyIcon: {
     width: 64,
@@ -774,6 +766,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   periodBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
@@ -781,6 +776,37 @@ const styles = StyleSheet.create({
   periodText: {
     fontSize: 12,
     fontWeight: '700',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(7, 32, 31, 0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 28,
+  },
+  periodModalCard: {
+    width: '100%',
+    borderRadius: 24,
+    padding: 24,
+    borderWidth: 1,
+    gap: 16,
+  },
+  periodModalTitle: {
+    fontSize: 18,
+  },
+  periodOptionsList: {
+    gap: 10,
+  },
+  periodOptionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+  },
+  periodOptionText: {
+    fontSize: 14,
   },
 
   // ── KPI Cards ──

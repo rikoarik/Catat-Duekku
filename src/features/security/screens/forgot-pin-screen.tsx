@@ -5,7 +5,6 @@ import { StyleSheet, View, TouchableOpacity, useColorScheme, Platform } from 're
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  withSpring,
   withTiming,
   Easing,
 } from 'react-native-reanimated';
@@ -31,7 +30,7 @@ export function ForgotPinScreen() {
   const colorScheme = useColorScheme();
   const theme = getTheme(colorScheme);
 
-  const [email, setEmail] = useState('');
+  const [account, setAccount] = useState<{ id: string; email: string } | null>(null);
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [modalState, setModalState] = useState<{
@@ -48,6 +47,13 @@ export function ForgotPinScreen() {
   React.useEffect(() => {
     cardOpacity.value = withTiming(1, { duration: 200, easing: Easing.out(Easing.quad) });
     cardY.value = withTiming(0, { duration: 200, easing: Easing.out(Easing.quad) });
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user.id && session.user.email) {
+        setAccount({ id: session.user.id, email: session.user.email });
+      } else {
+        router.replace('/auth');
+      }
+    }).catch(() => router.replace('/auth'));
   }, []);
   const cardStyle = useAnimatedStyle(() => ({
     opacity: cardOpacity.value,
@@ -73,20 +79,20 @@ export function ForgotPinScreen() {
   };
 
   const handleReset = async () => {
-    if (!email.trim() || !password) {
-      triggerModal('error', 'Data Tidak Lengkap', 'Masukkan email dan kata sandi Anda.');
+    if (!account || !password) {
+      triggerModal('error', 'Data Tidak Lengkap', 'Masukkan kata sandi Anda.');
       return;
     }
 
     setLoading(true);
     try {
-      // Re-authenticate to prove account ownership
-      const { error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+      const originalUserId = account.id;
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: account.email,
         password,
       });
 
-      if (error) {
+      if (error || data.user?.id !== originalUserId) {
         triggerModal(
           'error',
           'Verifikasi Gagal',
@@ -95,15 +101,16 @@ export function ForgotPinScreen() {
         return;
       }
 
-      // Auth success → clear old PIN so setup-pin can set a fresh one
       await clearPin();
 
       triggerModal(
         'success',
         'Identitas Terverifikasi',
         'Sekarang buat PIN baru untuk akun Anda.',
-        () => router.replace('/setup-pin')
+        () => router.replace({ pathname: '/setup-pin', params: { mode: 'reset' } })
       );
+    } catch {
+      triggerModal('error', 'Verifikasi Gagal', 'Tidak dapat mereset PIN. Pastikan sesi dan kata sandi Anda valid.');
     } finally {
       setLoading(false);
     }
@@ -144,9 +151,8 @@ export function ForgotPinScreen() {
               keyboardType="email-address"
               label="Alamat Email"
               leftIcon={<Sms color={theme.textMuted} size={20} variant="Outline" />}
-              placeholder="nama@email.com"
-              value={email}
-              onChangeText={setEmail}
+              editable={false}
+              value={account?.email ?? ''}
             />
             <Input
               secureTextEntry

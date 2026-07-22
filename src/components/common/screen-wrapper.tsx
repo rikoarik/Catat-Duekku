@@ -38,7 +38,7 @@ export function ScreenWrapper({
 
   return (
     <>
-      <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
+      <StatusBar style="dark" />
       {withSafeArea ? (
         <SafeAreaView style={[styles.container, { backgroundColor: getBackgroundColor() }]}>
           {content}
