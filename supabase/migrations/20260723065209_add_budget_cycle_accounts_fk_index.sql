@@ -1,0 +1,1 @@
+create index budget_cycle_accounts_cycle_user_idx on public.budget_cycle_accounts(cycle_id,user_id);

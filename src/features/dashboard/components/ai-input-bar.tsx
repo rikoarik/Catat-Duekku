@@ -1,14 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { StyleSheet, TextInput, TouchableOpacity, View, useColorScheme, ActivityIndicator } from 'react-native';
 import Animated, { FadeInDown, FadeOut } from 'react-native-reanimated';
 import { Magicpen, ArrowRight2, TickCircle, CloseCircle } from 'iconsax-react-native';
 import { getTheme } from '@/core/theme/colors';
 import { Text } from '@/components/ui/text';
 import { parseInput, type ParseResult } from '@/core/lib/transaction-parser';
+import { EdgeApiError } from '@/core/lib/edge-api';
 import { formatCurrency } from '@/core/utils/formatters';
 
 interface AiInputBarProps {
   placeholder?: string;
+  valuesVisible?: boolean;
   onSubmit?: (text: string, result: ParseResult) => void;
   onConfirmPreview?: (result: ParseResult) => Promise<void>;
 }
@@ -16,6 +18,8 @@ interface AiInputBarProps {
 const INTENT_LABEL: Record<string, { verb: string; tone: 'income' | 'expense' | 'neutral' }> = {
   create_expense: { verb: 'Pengeluaran', tone: 'expense' },
   create_income: { verb: 'Pemasukan', tone: 'income' },
+  transfer_account: { verb: 'Pindah dana', tone: 'neutral' },
+  create_account: { verb: 'Akun baru', tone: 'neutral' },
   set_balance: { verb: 'Penyesuaian saldo', tone: 'neutral' },
   pay_debt: { verb: 'Bayar utang', tone: 'expense' },
   create_debt: { verb: 'Utang baru', tone: 'neutral' },
@@ -31,56 +35,43 @@ const INTENT_LABEL: Record<string, { verb: string; tone: 'income' | 'expense' | 
 
 export function AiInputBar({
   placeholder = 'Tulis: makan 25 ribu cash',
+  valuesVisible = false,
   onSubmit,
   onConfirmPreview,
 }: AiInputBarProps) {
   const colorScheme = useColorScheme();
   const theme = getTheme(colorScheme);
-  const isDark = colorScheme === 'dark';
-
   const [text, setText] = useState('');
   const [result, setResult] = useState<ParseResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestRef = useRef(0);
 
   const handleChangeText = (value: string) => {
-    const trimmed = value.trim();
     setText(value);
     setError('');
-
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    if (!trimmed) {
-      setLoading(false);
-      setResult(null);
-      return;
-    }
-
-    setLoading(true);
+    setResult(null);
   };
 
-  // Debounced parse on every keystroke
-  useEffect(() => {
-    if (!text.trim()) {
-      return;
+  const handleParse = async () => {
+    const input = text.trim();
+    if (!input || loading) return;
+    const request = ++requestRef.current;
+    setLoading(true);
+    setError('');
+    try {
+      const parsed = await parseInput(input);
+      if (request === requestRef.current) setResult(parsed);
+    } catch (cause) {
+      if (request !== requestRef.current) return;
+      setResult(null);
+      setError(cause instanceof EdgeApiError && cause.status === 429
+        ? `AI sedang dibatasi. Coba lagi dalam ${cause.retryAfter ?? 60} detik.`
+        : cause instanceof Error ? cause.message : 'Gagal memproses input.');
+    } finally {
+      if (request === requestRef.current) setLoading(false);
     }
-
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const parsed = await parseInput(text);
-        setResult(parsed);
-      } catch (cause) {
-        setResult(null);
-        setError(cause instanceof Error ? cause.message : 'Gagal memproses input.');
-      } finally {
-        setLoading(false);
-      }
-    }, 350);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [text]);
+  };
 
   const handleConfirm = async () => {
     if (!result || !onConfirmPreview) return;
@@ -91,14 +82,14 @@ export function AiInputBar({
       setText('');
       setResult(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Gagal menyimpan transaksi.');
+      setError(cause instanceof Error ? cause.message : 'Gagal menjalankan aksi.');
     } finally {
       setLoading(false);
     }
   };
 
   const handleSubmit = async () => {
-    if (!text.trim() || !result) return;
+    if (!result) return handleParse();
     onSubmit?.(text.trim(), result);
     if (onConfirmPreview) await handleConfirm();
   };
@@ -116,9 +107,7 @@ export function AiInputBar({
       ? theme.incomeSurface
       : tone === 'expense'
       ? theme.expenseSurface
-      : isDark
-      ? theme.surfaceMuted
-      : '#F1F5F9';
+       : theme.surfaceElement;
 
   return (
     <View style={styles.outer}>
@@ -127,12 +116,12 @@ export function AiInputBar({
         style={[
           styles.bar,
           {
-            backgroundColor: isDark ? theme.surfaceMuted : '#FFFFFF',
-            borderColor: text ? theme.deepTeal : theme.border,
+             backgroundColor: theme.cardBackground,
+             borderColor: text ? theme.primary : theme.border,
           },
         ]}>
-        <View style={[styles.iconBadge, { backgroundColor: theme.deepTeal }]}>
-          <Magicpen color={theme.softLime} size={16} variant="Linear" />
+         <View style={[styles.iconBadge, { backgroundColor: theme.surfaceElement }]}>
+           <Magicpen color={theme.deepTeal} size={16} variant="Linear" />
         </View>
         <TextInput
           value={text}
@@ -140,24 +129,27 @@ export function AiInputBar({
           placeholder={placeholder}
           placeholderTextColor={theme.textMuted}
           style={[styles.input, { color: theme.textPrimary }]}
-          multiline
-          returnKeyType="send"
-          blurOnSubmit
-          onSubmitEditing={handleSubmit}
+           multiline
+           scrollEnabled={false}
+           returnKeyType="send"
+           blurOnSubmit
+           onSubmitEditing={handleSubmit}
         />
         <TouchableOpacity
           activeOpacity={0.7}
           onPress={handleSubmit}
-          disabled={!text.trim() || !result}
+           disabled={!text.trim() || loading}
+
           style={[
             styles.sendBtn,
-            { backgroundColor: text.trim() && result ? theme.deepTeal : theme.surfaceButton },
+             { backgroundColor: text.trim() && !loading ? theme.deepTeal : theme.surfaceButton },
+
           ]}>
           {loading ? (
-            <ActivityIndicator color={theme.textPrimary} size="small" />
+             <ActivityIndicator color={theme.onPrimary} size="small" />
           ) : (
             <ArrowRight2
-              color={text.trim() && result ? theme.onPrimary : theme.textMuted}
+              color={text.trim() && !loading ? theme.onPrimary : theme.textMuted}
               size={18}
               variant="Bold"
             />
@@ -189,17 +181,23 @@ export function AiInputBar({
               </Text>
             </View>
             <Text style={[styles.previewMeta, { color: theme.textMuted }]}>
-              {Math.round(result.confidence * 100)}% yakin
+               {valuesVisible ? `${Math.round(result.confidence * 100)}% yakin` : '••% yakin'}
             </Text>
           </View>
 
           <View style={styles.previewBody}>
             {typeof result.fields.amount === 'number' && (
               <Text style={[styles.previewAmount, { color: toneColor }]}>
-                {formatCurrency(result.fields.amount)}
+                 {valuesVisible ? formatCurrency(result.fields.amount) : '••••••••'}
               </Text>
             )}
-            {result.fields.accountName && (
+             {result.fields.sourceAccountName && result.fields.destinationAccountName && (
+               <Text style={[styles.previewDetail, { color: theme.textPrimary }]}>
+                 {result.fields.sourceAccountName} → {result.fields.destinationAccountName}
+               </Text>
+             )}
+             {result.fields.accountName && (
+
               <Text style={[styles.previewDetail, { color: theme.textPrimary }]}>
                 {result.fields.accountName}
                 {result.fields.categoryName ? ` · ${result.fields.categoryName}` : ''}
@@ -222,7 +220,7 @@ export function AiInputBar({
             )}
             {typeof result.fields.newBalance === 'number' && (
               <Text style={[styles.previewDetail, { color: theme.textPrimary }]}>
-                Saldo baru: {formatCurrency(result.fields.newBalance)}
+                 Saldo baru: {valuesVisible ? formatCurrency(result.fields.newBalance) : '••••••••'}
               </Text>
             )}
             {result.reason && (
@@ -250,7 +248,6 @@ const styles = StyleSheet.create({
   outer: {
     gap: 8,
     marginHorizontal: 20,
-    marginVertical: 6,
   },
   bar: {
     flexDirection: 'row',

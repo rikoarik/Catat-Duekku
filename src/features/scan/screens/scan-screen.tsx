@@ -71,6 +71,11 @@ export function ScanScreen() {
   const [draftIntent, setDraftIntent] = useState<ParserResponse['intent']>('unknown');
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<ApiCategory[]>([]);
+  const [referencesLoading, setReferencesLoading] = useState(true);
+  const [referencesError, setReferencesError] = useState('');
+  const [amountError, setAmountError] = useState('');
+  const [accountError, setAccountError] = useState('');
+  const [categoryError, setCategoryError] = useState('');
 
   // Dropdowns
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
@@ -97,22 +102,39 @@ export function ScanScreen() {
     setAccountName(data.fields.account_name ?? '');
     setAccountKind(data.fields.account_kind ?? 'BANK');
     setVendor(data.fields.description ?? data.fields.debt_name ?? data.fields.goal_name ?? '');
-    setCategory(data.fields.category_name ?? categories.find(({ type }) => type === (data.intent === 'create_income' ? 'INCOME' : 'EXPENSE'))?.name ?? '');
+    const inferredType = data.intent === 'create_income' ? 'INCOME' : 'EXPENSE';
+    const inferredCategory = categories.find(({ name, type }) => type === inferredType && name.toLocaleLowerCase('id-ID') === data.fields.category_name?.toLocaleLowerCase('id-ID'));
+    setCategory(inferredCategory?.name ?? categories.find(({ type }) => type === inferredType)?.name ?? '');
     const parsedAccount = accounts.find(({ id, name }) => id === data.fields.account_id || name.toLocaleLowerCase('id-ID') === data.fields.account_name?.toLocaleLowerCase('id-ID'));
-    setAccountId(parsedAccount?.id ?? accounts[0]?.id ?? '');
+    setAccountId(parsedAccount?.id ?? accounts.find((item) => item.is_default)?.id ?? accounts[0]?.id ?? '');
     setNote('');
+    setAmountError('');
+    setAccountError('');
+    setCategoryError('');
     setState('result');
     return true;
   };
 
   const [saving, setSaving] = useState(false);
   const transactionKey = useRef<string | null>(null);
-  useEffect(() => {
-    Promise.all([edgeApi.accounts(), edgeApi.categories()]).then(([accountResponse, categoryResponse]) => {
+  const loadReferences = async () => {
+    setReferencesLoading(true);
+    setReferencesError('');
+    try {
+      const [accountResponse, categoryResponse] = await Promise.all([edgeApi.accounts(), edgeApi.categories()]);
       setAccounts(accountResponse.data);
       setCategories(categoryResponse.data);
-      setAccountId((current) => current || accountResponse.data[0]?.id || '');
-    }).catch((error) => Alert.alert(t('scan.loadAccountFailed'), error instanceof Error ? error.message : t('scan.loadAccountFailedFallback')));
+      setAccountId((current) => current || accountResponse.data.find((item) => item.is_default)?.id || accountResponse.data[0]?.id || '');
+    } catch (error) {
+      setReferencesError(error instanceof Error ? error.message : t('scan.loadAccountFailedFallback'));
+    } finally {
+      setReferencesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const task = setTimeout(() => void loadReferences(), 0);
+    return () => clearTimeout(task);
   }, []);
 
   // Flash toggle
@@ -193,15 +215,19 @@ export function ScanScreen() {
       setStatusModal({ visible: true, type: 'error', title: t('scan.unsupportedIntentTitle'), message: 'Jenis tindakan ini belum dapat disimpan.' });
       return;
     }
-    const parsedAmount = parseInt(amount.replace(/[^\d]/g, ''), 10);
-    if (isNaN(parsedAmount) || parsedAmount < 0 || (!['set_balance', 'create_account'].includes(draftIntent) && parsedAmount === 0)) {
-      Alert.alert(t('scan.invalidAmountTitle'), t('scan.invalidAmountMessage'));
-      return;
-    }
-
+    setAmountError('');
+    setAccountError('');
+    setCategoryError('');
+    const parsedAmount = Number(amount.replace(/[^\d]/g, ''));
+    const amountInvalid = !Number.isSafeInteger(parsedAmount) || parsedAmount < 0 || (!['set_balance', 'create_account'].includes(draftIntent) && parsedAmount === 0);
     const selectedAccount = accounts.find(({ id }) => id === accountId);
-    if (draftIntent === 'create_account' ? !accountName.trim() : !selectedAccount) {
-      Alert.alert(t('scan.accountRequiredTitle'), t('scan.accountRequiredMessage'));
+    const accountInvalid = draftIntent === 'create_account' ? !accountName.trim() : !selectedAccount;
+    const selectedCategory = categories.find(({ name, type }) => type === transactionType && name === category);
+    const categoryInvalid = !['set_balance', 'create_account'].includes(draftIntent) && !selectedCategory;
+    if (amountInvalid || accountInvalid || categoryInvalid) {
+      if (amountInvalid) setAmountError(t('scan.invalidAmountMessage'));
+      if (accountInvalid) setAccountError(t('scan.accountRequiredMessage'));
+      if (categoryInvalid) setCategoryError('Pilih kategori yang sesuai dengan jenis transaksi.');
       return;
     }
 
@@ -210,13 +236,19 @@ export function ScanScreen() {
       transactionKey.current ??= idempotencyKey(draftIntent === 'create_account' ? 'scan-account' : draftIntent === 'set_balance' ? 'scan-balance' : 'scan-transaction');
       if (draftIntent === 'create_account') await edgeApi.createAccount({ name: accountName.trim(), kind: accountKind, opening_balance: parsedAmount }, transactionKey.current);
       else if (draftIntent === 'set_balance') await edgeApi.setAccountBalance(selectedAccount!.id, parsedAmount, selectedAccount!.version, transactionKey.current);
-      else await edgeApi.createTransaction({
+      else if (transactionType === 'EXPENSE') {
+        const input = { account_id: accountId, amount: parsedAmount, category_name: selectedCategory?.name ?? null, description: vendor.trim() || t('scan.defaultDescription') };
+        const preview = await edgeApi.parserFinancePreview(accountId, parsedAmount, 'EXPENSE');
+        if (preview.protected_shortfall > 0) {
+          await new Promise<void>((resolve, reject) => Alert.alert('Dana terlindungi akan terpakai', `${preview.protected_shortfall.toLocaleString('id-ID')} rupiah perlu dilepas dari dana terlindungi.`, [{ text: 'Batal', style: 'cancel', onPress: () => reject(new Error('Penyimpanan dibatalkan.')) }, { text: 'Tetap simpan', style: 'destructive', onPress: () => { void edgeApi.createParserExpense({ ...input, override_protected: true }, transactionKey.current!).then(() => resolve(), reject); } }]));
+        } else await edgeApi.createParserExpense({ ...input, override_protected: false }, transactionKey.current);
+      } else await edgeApi.createTransaction({
         type: transactionType,
         amount: parsedAmount,
         account_id: accountId,
-        category_name: category,
+        category_name: selectedCategory?.name ?? null,
         description: vendor.trim() || t('scan.defaultDescription'),
-        note: note.trim(),
+        note: note.trim() || null,
         source: 'RECEIPT',
       }, transactionKey.current);
       setStatusModal({
@@ -226,7 +258,7 @@ export function ScanScreen() {
         message: draftIntent === 'create_account' ? `${accountName.trim()} dibuat dengan saldo Rp ${parsedAmount.toLocaleString('id-ID')}` : draftIntent === 'set_balance' ? `Saldo ${selectedAccount!.name} kini Rp ${parsedAmount.toLocaleString('id-ID')}` : `Rp ${parsedAmount.toLocaleString('id-ID')} — ${t('scan.saveSuccessMessage')}`,
       });
     } catch (err) {
-      Alert.alert(t('scan.saveFailedTitle'), err instanceof Error ? err.message : t('scan.genericError'));
+      setStatusModal({ visible: true, type: 'error', title: t('scan.saveFailedTitle'), message: err instanceof Error ? err.message : t('scan.genericError') });
     } finally {
       setSaving(false);
     }
@@ -277,6 +309,7 @@ export function ScanScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        {referencesError ? <Card variant="surface" style={styles.referenceError}><Text style={{ color: theme.expense }} weight="bold">Data akun belum siap</Text><Text style={[styles.referenceErrorText, { color: theme.textMuted }]}>{referencesError}</Text><Button title="Coba lagi" size="small" variant="outline" onPress={() => void loadReferences()} /></Card> : null}
         {/* CAMERA STATE: LARGE CUSTOM CAMERA VIEWFINDER & MOTION SCAN */}
         {state === 'camera' && (
           <Animated.View entering={FadeInDown.duration(300)} style={styles.stateContainer}>
@@ -413,17 +446,18 @@ export function ScanScreen() {
                 {/* Nominal Input */}
                 <Input
                   keyboardType="numeric"
-                  label={draftIntent === 'create_account' ? 'Saldo awal' : draftIntent === 'set_balance' ? 'Saldo baru' : t('scan.amountLabel')}
+                  label={`${draftIntent === 'create_account' ? 'Saldo awal' : draftIntent === 'set_balance' ? 'Saldo baru' : t('scan.amountLabel')} · Wajib`}
                   leftIcon={<DollarCircle color={theme.textMuted} size={20} variant="Outline" />}
                   value={amount}
-                  onChangeText={(val) => setAmount(val.replace(/[^\d]/g, ''))}
+                  error={amountError}
+                  onChangeText={(val) => { setAmount(val.replace(/[^\d]/g, '')); setAmountError(''); transactionKey.current = null; }}
                 />
 
                 {draftIntent === 'create_account' && <>
                   <Input label="Nama akun" leftIcon={<CardIcon color={theme.textMuted} size={20} variant="Outline" />} value={accountName} onChangeText={setAccountName} />
                   <View style={styles.dropdownSection}>
                     <Text style={[styles.fieldLabel, { color: theme.textPrimary }]}>Jenis akun</Text>
-                    <View style={styles.actionRow}>{(['CASH', 'BANK', 'E_WALLET'] as const).map((kind) => <Button key={kind} title={kind} variant={accountKind === kind ? 'lime' : 'outline'} size="small" style={styles.flexBtn} onPress={() => setAccountKind(kind)} />)}</View>
+                    <View style={styles.actionRow}>{(['CASH', 'BANK', 'E_WALLET', 'INVESTMENT'] as const).map((kind) => <Button key={kind} title={{ CASH: 'Tunai', BANK: 'Bank', E_WALLET: 'E-Wallet', INVESTMENT: 'Investasi' }[kind]} variant={accountKind === kind ? 'lime' : 'outline'} size="small" style={styles.flexBtn} onPress={() => setAccountKind(kind)} />)}</View>
                   </View>
                 </>}
 
@@ -434,8 +468,10 @@ export function ScanScreen() {
                   onChangeText={setVendor}
                 />}
 
+                {!['set_balance', 'create_account'].includes(draftIntent) && <View style={styles.typeRow}>{(['EXPENSE', 'INCOME'] as const).map((type) => <Button key={type} title={type === 'EXPENSE' ? 'Pengeluaran' : 'Pemasukan'} size="small" variant={transactionType === type ? 'lime' : 'outline'} style={styles.flexBtn} onPress={() => { setTransactionType(type); setDraftIntent(type === 'EXPENSE' ? 'create_expense' : 'create_income'); setCategory(categories.find((item) => item.type === type)?.name ?? ''); setCategoryError(''); transactionKey.current = null; }} />)}</View>}
+
                 {!['set_balance', 'create_account'].includes(draftIntent) && <View style={styles.dropdownSection}>
-                  <Text style={[styles.fieldLabel, { color: theme.textPrimary }]}>{t('scan.categoryLabel')}</Text>
+                  <Text style={[styles.fieldLabel, { color: theme.textPrimary }]}>{t('scan.categoryLabel')} · Wajib</Text>
                   <TouchableOpacity
                     activeOpacity={0.7}
                     style={[styles.dropdownBtn, { backgroundColor: theme.surfaceElement, borderColor: theme.border }]}
@@ -443,9 +479,9 @@ export function ScanScreen() {
                   >
                     <View style={styles.dropdownLeft}>
                       <Category color={theme.textMuted} size={20} variant="Outline" />
-                      <Text style={{ color: theme.textPrimary }} weight="medium">
-                        {category}
-                      </Text>
+                       <Text style={{ color: category ? theme.textPrimary : theme.textMuted }} weight="medium">
+                         {category || (referencesLoading ? 'Memuat kategori…' : 'Pilih kategori')}
+                       </Text>
                     </View>
                   </TouchableOpacity>
 
@@ -457,20 +493,23 @@ export function ScanScreen() {
                           activeOpacity={0.7}
                           style={styles.dropdownOption}
                           onPress={() => {
-                            setCategory(item.name);
-                            setShowCategoryPicker(false);
+                             setCategory(item.name);
+                             setCategoryError('');
+                             transactionKey.current = null;
+                             setShowCategoryPicker(false);
                           }}
                         >
                           <Text style={{ color: theme.textPrimary }}>{item.name}</Text>
                         </TouchableOpacity>
                       ))}
                     </Card>
-                  )}
-                </View>}
+                   )}
+                  {categoryError ? <Text style={[styles.fieldError, { color: theme.expense }]}>{categoryError}</Text> : null}
+                 </View>}
 
-                {/* Akun Pembayaran Dropdown */}
+                 {/* Akun Pembayaran Dropdown */}
                 {draftIntent !== 'create_account' && <View style={styles.dropdownSection}>
-                  <Text style={[styles.fieldLabel, { color: theme.textPrimary }]}>{draftIntent === 'set_balance' ? 'Akun' : t('scan.paymentSourceLabel')}</Text>
+                   <Text style={[styles.fieldLabel, { color: theme.textPrimary }]}>{draftIntent === 'set_balance' ? 'Akun' : t('scan.paymentSourceLabel')} · Wajib</Text>
                   <TouchableOpacity
                     activeOpacity={0.7}
                     style={[styles.dropdownBtn, { backgroundColor: theme.surfaceElement, borderColor: theme.border }]}
@@ -479,7 +518,7 @@ export function ScanScreen() {
                     <View style={styles.dropdownLeft}>
                       <CardIcon color={theme.textMuted} size={20} variant="Outline" />
                       <Text style={{ color: theme.textPrimary }} weight="medium">
-                        {accounts.find((a) => a.id === accountId)?.name || t('scan.selectAccount')}
+                         {accounts.find((a) => a.id === accountId)?.name || (referencesLoading ? 'Memuat akun…' : accounts.length ? t('scan.selectAccount') : 'Belum ada akun')}
                       </Text>
                     </View>
                   </TouchableOpacity>
@@ -492,19 +531,22 @@ export function ScanScreen() {
                           activeOpacity={0.7}
                           style={styles.dropdownOption}
                           onPress={() => {
-                            setAccountId(acc.id);
-                            setShowAccountPicker(false);
+                             setAccountId(acc.id);
+                             setAccountError('');
+                             transactionKey.current = null;
+                             setShowAccountPicker(false);
                           }}
                         >
                           <Text style={{ color: theme.textPrimary }}>{acc.name}</Text>
                         </TouchableOpacity>
                       ))}
                     </Card>
-                  )}
-                </View>}
+                   )}
+                  {accountError ? <Text style={[styles.fieldError, { color: theme.expense }]}>{accountError}</Text> : null}
+                 </View>}
 
-                {!['set_balance', 'create_account'].includes(draftIntent) && <Input
-                  label={t('scan.noteLabel')}
+                 {!['set_balance', 'create_account'].includes(draftIntent) && <Input
+                   label={`${t('scan.noteLabel')} · Opsional`}
                   leftIcon={<Calendar color={theme.textMuted} size={20} variant="Outline" />}
                   value={note}
                   onChangeText={setNote}
@@ -513,20 +555,20 @@ export function ScanScreen() {
             </Card>
 
             {/* Bottom Actions */}
-            <View style={styles.actionRow}>
+            <View style={styles.resultActions}>
               <Button
                  title={saving ? t('scan.savingBtn') : draftIntent === 'create_account' ? 'Buat akun' : draftIntent === 'set_balance' ? 'Perbarui saldo' : transactionType === 'INCOME' ? 'Simpan pemasukan' : 'Simpan pengeluaran'}
-                disabled={saving}
+                disabled={saving || referencesLoading || !!referencesError}
+                icon={saving ? <ActivityIndicator color={theme.deepTeal} size="small" /> : undefined}
                 variant="lime"
                 size="large"
-                style={styles.flexBtn}
                 onPress={handleSaveTransaction}
               />
               <Button
                 title={t('scan.rescanBtn')}
+                disabled={saving}
                 variant="outline"
-                size="large"
-                style={styles.flexBtn}
+                size="medium"
                 onPress={() => {
                   transactionKey.current = null;
                   setState('camera');
@@ -550,7 +592,10 @@ export function ScanScreen() {
           setStatusModal((prev) => ({ ...prev, visible: false }));
           if (statusModal.type === 'success') router.back();
         }}
-        onClose={() => setStatusModal((prev) => ({ ...prev, visible: false }))}
+         onClose={() => {
+           setStatusModal((prev) => ({ ...prev, visible: false }));
+           if (statusModal.type === 'success') router.back();
+         }}
       />
 
     </ScreenWrapper>
@@ -778,6 +823,11 @@ const styles = StyleSheet.create({
   dropdownSection: {
     gap: 6,
   },
+  referenceError: { marginHorizontal: 0, marginBottom: 14, padding: 16, gap: 8 },
+  referenceErrorText: { fontSize: 12, lineHeight: 18 },
+  typeRow: { flexDirection: 'row', gap: 10 },
+  resultActions: { gap: 10 },
+  fieldError: { fontSize: 12, lineHeight: 17, paddingHorizontal: 2 },
   fieldLabel: {
     fontSize: 14,
     fontWeight: '600',

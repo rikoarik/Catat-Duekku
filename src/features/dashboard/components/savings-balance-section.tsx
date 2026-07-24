@@ -11,7 +11,7 @@ import {
   MoneyRecive,
   WalletAdd,
 } from 'iconsax-react-native';
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, TouchableOpacity, useColorScheme, View } from 'react-native';
 import Animated, {
   Easing,
@@ -54,7 +54,7 @@ const BASE_ITEMS_CONFIG = [
   },
   {
     id: '3',
-    title: 'Tabungan',
+    title: 'Surplus',
     type: 'savings' as const,
     color: '#854D0E',
     bgColor: '#FACC15',
@@ -80,17 +80,23 @@ const BASE_ITEMS_CONFIG = [
 
 export function SavingsBalanceSection({
   totalBalance = 0,
+  protectedBalance = 0,
+  freeBalance = 0,
   monthlyIncomeChange = 0,
   monthlyExpense = 0,
   remainingDebt = 0,
+  safeToSpend = 0,
+  budgetTarget = 0,
   percentChange = 0,
+  valuesVisible = false,
+  onToggleValues,
 }: any) {
   const colorScheme = useColorScheme();
   const theme = getTheme(colorScheme);
   const isDark = colorScheme === 'dark';
 
   const netSavings = Math.max(0, monthlyIncomeChange - Math.abs(monthlyExpense));
-  const remainingBudget = Math.max(0, monthlyIncomeChange - Math.abs(monthlyExpense));
+  const remainingBudget = Math.max(0, safeToSpend);
 
   const ITEMS: TargetOrDebtItem[] = BASE_ITEMS_CONFIG.map((item) => {
     let currentAmount = 0;
@@ -115,7 +121,7 @@ export function SavingsBalanceSection({
         break;
       case 'budget':
         currentAmount = remainingBudget;
-        targetAmount = monthlyIncomeChange > 0 ? monthlyIncomeChange : remainingBudget;
+        targetAmount = budgetTarget > 0 ? budgetTarget : remainingBudget;
         break;
     }
 
@@ -127,7 +133,6 @@ export function SavingsBalanceSection({
   });
 
   const [selectedItemId, setSelectedItemId] = useState<string>('2');
-  const [isBalanceVisible, setIsBalanceVisible] = useState<boolean>(true);
 
   const lastTickIndexRef = useRef(-1);
   const STRIPE_STEP = 6;
@@ -142,15 +147,11 @@ export function SavingsBalanceSection({
   const getItemWidth = (id: string) => ITEM_WIDTHS[id] ?? 120;
   const singleSetWidth = ITEMS.reduce((acc, item) => acc + getItemWidth(item.id), 0);
 
-  const itemOffsets = useMemo(() => {
-    let currentOffset = 0;
-    return ITEMS.map((item) => {
-      const width = getItemWidth(item.id);
-      const start = currentOffset;
-      currentOffset += width;
-      return { ...item, width, start, end: currentOffset };
-    });
-  }, [ITEMS]);
+  const itemOffsets = ITEMS.map((item, index) => {
+    const start = ITEMS.slice(0, index).reduce((total, entry) => total + getItemWidth(entry.id), 0);
+    const width = getItemWidth(item.id);
+    return { ...item, width, start, end: start + width };
+  });
 
   const scrollViewRef = useRef<ScrollView>(null);
   const LOOPED_ITEMS = [...ITEMS, ...ITEMS, ...ITEMS];
@@ -190,11 +191,11 @@ export function SavingsBalanceSection({
 
   const toggleEye = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setIsBalanceVisible((prev) => !prev);
+    onToggleValues?.();
   };
 
   const formatCurrency = (amount: number) => {
-    if (!isBalanceVisible) return '••••••••';
+    if (!valuesVisible) return '••••••••';
     return new Intl.NumberFormat('id-ID', {
       style: 'currency',
       currency: 'IDR',
@@ -224,8 +225,11 @@ export function SavingsBalanceSection({
           <TouchableOpacity
             activeOpacity={0.7}
             style={styles.eyeButton}
+            accessibilityRole="button"
+            accessibilityLabel={valuesVisible ? 'Sembunyikan semua angka' : 'Tampilkan semua angka'}
+            accessibilityState={{ expanded: valuesVisible }}
             onPress={toggleEye}>
-            {isBalanceVisible ? (
+            {valuesVisible ? (
               <Eye color={theme.textMuted} size={18} variant="Linear" />
             ) : (
               <EyeSlash color={theme.textMuted} size={18} variant="Linear" />
@@ -237,16 +241,18 @@ export function SavingsBalanceSection({
       </View>
 
       {/* Amount Text */}
-      <Text style={[styles.amountText, { color: theme.textPrimary }]}>
+      <Text style={[styles.amountText, { color: theme.textPrimary }]} accessibilityLabel={`Saldo kotor ${formatCurrency(totalBalance)}`}>
         {formatCurrency(totalBalance)}
       </Text>
+
+      <Text style={{ color: theme.textMuted }}>Terlindungi {formatCurrency(protectedBalance)} · Bebas {formatCurrency(freeBalance)}</Text>
 
       <View style={styles.changeRow}>
         <ArrowUp color="#10B981" size={14} variant="Bold" />
         <Text style={styles.changeAmountText}>
-          {isBalanceVisible ? formatCurrency(monthlyIncomeChange) : '••••••'}
+          {formatCurrency(monthlyIncomeChange)}
         </Text>
-        <Text style={styles.percentText}>({percentChange}%)</Text>
+        <Text style={styles.percentText}>{valuesVisible ? `(${percentChange}%)` : '(••%)'}</Text>
       </View>
 
       {/* Meter Bar Spectrum */}
@@ -317,6 +323,7 @@ export function SavingsBalanceSection({
         {/* Card Detail dengan Pattern Sejajar & Tanpa Kedip */}
         <AnimatedDetailCard
           formatCurrency={formatCurrency}
+          valuesVisible={valuesVisible}
           isDark={isDark}
           selectedItem={selectedItem}
           theme={theme}
@@ -326,7 +333,7 @@ export function SavingsBalanceSection({
   );
 }
 
-function AnimatedDetailCard({ selectedItem, isDark, theme, formatCurrency }: any) {
+function AnimatedDetailCard({ selectedItem, valuesVisible, isDark, theme, formatCurrency }: any) {
   const progressWidth = useSharedValue(0);
   const cardScale = useSharedValue(1);
 
@@ -345,7 +352,7 @@ function AnimatedDetailCard({ selectedItem, isDark, theme, formatCurrency }: any
       duration: 500,
       easing: Easing.out(Easing.cubic),
     });
-  }, [selectedItem.id, percent]);
+  }, [cardScale, percent, progressWidth, selectedItem.id]);
 
   const cardAnimStyle = useAnimatedStyle(() => ({
     transform: [{ scale: cardScale.value }],
@@ -401,7 +408,7 @@ function AnimatedDetailCard({ selectedItem, isDark, theme, formatCurrency }: any
         {showProgress ? (
           <View style={[styles.percentPill, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#F1F5F9' }]}>
             <Text style={[styles.detailPercent, { color: accentColor }]}>
-              {percent}%
+              {valuesVisible ? `${percent}%` : '••%'}
             </Text>
           </View>
         ) : null}

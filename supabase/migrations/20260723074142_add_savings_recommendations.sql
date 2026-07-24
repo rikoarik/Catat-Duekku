@@ -1,0 +1,22 @@
+create function public.get_savings_recommendations() returns jsonb language sql security definer set search_path='' stable as $$
+with settings as(
+ select p.timezone,(now() at time zone p.timezone)::date today from public.profiles p where p.user_id=(select auth.uid())
+), cycle as(
+ select c.* from public.budget_cycles c where c.user_id=(select auth.uid()) and c.status='ACTIVE' order by c.start_date desc limit 1
+), obligations as(
+ select coalesce(sum(greatest(a.allocated_amount-coalesce((select sum(-t.amount) from public.transactions t join cycle c on true where t.user_id=c.user_id and t.category_id=a.category_id and t.type='EXPENSE' and t.deleted_at is null and (t.occurred_at at time zone c.timezone)::date>=c.start_date and (t.occurred_at at time zone c.timezone)::date<c.end_date),0),0)),0)::bigint amount from public.budget_allocations a join cycle c on c.id=a.cycle_id where a.kind='OBLIGATION' and a.deleted_at is null
+), capacity as(
+ select greatest(coalesce(sum(ac.balance),0)-coalesce(sum((select coalesce(sum(l.locked_amount),0) from public.saving_virtual_locks l where l.account_id=ac.id)),0)-coalesce(c.minimum_balance,0)-(select amount from obligations),0)::bigint safe_now, greatest(coalesce(sum(ac.balance),0)-coalesce(sum((select coalesce(sum(l.locked_amount),0) from public.saving_virtual_locks l where l.account_id=ac.id)),0)+coalesce((select sum(p.expected_amount) from public.budget_income_plans p where p.cycle_id=c.id and p.status='EXPECTED'),0)-coalesce(c.minimum_balance,0)-(select amount from obligations),0)::bigint projected from cycle c left join public.budget_cycle_accounts b on b.cycle_id=c.id left join public.accounts ac on ac.id=b.account_id and ac.deleted_at is null group by c.id,c.minimum_balance
+), cap as(
+ select coalesce((select safe_now from capacity),0)::bigint safe_now,coalesce((select projected from capacity),0)::bigint projected
+), goals as(
+ select g.*,s.today,greatest(g.target_amount-g.saved_amount,0)::bigint remaining,case when g.target_date is null then null else greatest(((extract(year from g.target_date)::integer-extract(year from s.today)::integer)*12+extract(month from g.target_date)::integer-extract(month from s.today)::integer+1),1) end months_left,case when g.target_date is null then 0 else greatest(((extract(year from g.target_date)::integer-extract(year from g.created_at)::integer)*12+extract(month from g.target_date)::integer-extract(month from g.created_at)::integer+1),1) end total_months,case when g.target_date is null then 0 else greatest(((extract(year from s.today)::integer-extract(year from g.created_at)::integer)*12+extract(month from s.today)::integer-extract(month from g.created_at)::integer+1),0) end elapsed_months from public.saving_goals g cross join settings s where g.user_id=(select auth.uid()) and g.deleted_at is null
+), calc as(
+ select g.*,case when months_left is null or remaining=0 then null else ceil(remaining::numeric/months_left)::bigint end required_monthly,case when target_date is null then 0 else least(target_amount,floor(target_amount::numeric*least(elapsed_months,total_months)/total_months)::bigint) end expected_funded from goals g
+), ranked as(
+ select calc.*,row_number() over(order by case priority when 'CRITICAL' then 1 when 'HIGH' then 2 when 'NORMAL' then 3 else 4 end,target_date nulls last,created_at,id) rank from calc
+)
+select jsonb_build_object('capacity',(select to_jsonb(cap) from cap),'goals',coalesce((select jsonb_agg(jsonb_build_object('goal_id',id,'name',name,'priority',priority,'remaining_amount',remaining,'required_monthly',required_monthly,'safe_contribution',least(remaining,(select safe_now from cap)),'projected_safe_contribution',least(remaining,(select projected from cap)),'expected_funded',expected_funded,'behind_amount',greatest(expected_funded-saved_amount,0),'schedule_status',case when remaining=0 then 'FUNDED' when target_date is not null and today>target_date then 'OVERDUE' when saved_amount<expected_funded then 'BEHIND' else 'ON_TRACK' end,'projected_completion_date',case when required_monthly is null or required_monthly=0 or (select safe_now from cap)=0 then null else (date_trunc('month',today)+(ceil(remaining::numeric/least(required_monthly,(select safe_now from cap)))-1)*interval '1 month'+interval '1 month'-interval '1 day')::date end) order by rank) from ranked),'[]'::jsonb))
+$$;
+revoke execute on function public.get_savings_recommendations() from public,anon;
+grant execute on function public.get_savings_recommendations() to authenticated;

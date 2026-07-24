@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { router } from 'expo-router';
 import { Text } from '@/components/ui/text';
 import Svg, { Path, Line, Text as SvgText, Defs, LinearGradient, Stop, Circle } from 'react-native-svg';
 import Animated, { 
@@ -671,7 +672,7 @@ export function AnalyticsScreen() {
             <Text style={[styles.insightText, { color: theme.textPrimary }]}>
               {insightMessage}
             </Text>
-            <TouchableOpacity activeOpacity={0.7} style={styles.insightBtn}>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Tanya AI tentang keuangan" activeOpacity={0.7} style={styles.insightBtn} onPress={() => router.push('/analytics-chat')}>
               <Text style={styles.insightBtnText}>Tanya AI</Text>
             </TouchableOpacity>
           </View>

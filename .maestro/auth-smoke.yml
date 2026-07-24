@@ -1,0 +1,11 @@
+appId: com.catatduekku.app
+---
+- stopApp
+- clearState
+- launchApp
+- assertVisible: "Selamat Datang Kembali"
+- assertVisible: "Email"
+- assertVisible: "Password"
+- tapOn: "Daftar"
+- assertVisible: "Buat Akun"
+- assertVisible: "Nama Lengkap"

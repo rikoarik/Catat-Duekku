@@ -1,6 +1,6 @@
 import { getTheme } from '@/core/theme/colors';
 import * as Haptics from 'expo-haptics';
-import { Chart, Home3, Profile, Scan, Setting2 } from 'iconsax-react-native';
+import { Chart2, Home3, Profile, Scan, Setting2 } from 'iconsax-react-native';
 import { useEffect } from 'react';
 import {
   Platform,
@@ -116,7 +116,7 @@ export function FloatingGlassNav({
               activeOpacity={0.8}
               style={styles.tabItem}
               onPress={() => onTabChange('analytics')}>
-              <Chart
+              <Chart2
                 color={activeTab === 'analytics' ? theme.deepTeal : theme.onSurfaceStrong}
                 size={24}
                 variant={activeTab === 'analytics' ? 'Bold' : 'Outline'}

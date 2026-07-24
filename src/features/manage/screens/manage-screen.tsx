@@ -3,10 +3,9 @@ import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
-  NativeScrollEvent,
-  NativeSyntheticEvent,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   TextInput,
@@ -14,33 +13,33 @@ import {
   View,
   useColorScheme,
 } from 'react-native';
-import Animated, { FadeInDown, FadeOutUp, LinearTransition } from 'react-native-reanimated';
+import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { router } from 'expo-router';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { CustomDatePickerModal } from '@/components/ui/custom-date-picker-modal';
 import {
   Add,
-  ArrowDown2,
+
+  ArrowRight2,
   Bank,
   Calendar,
   CardReceive,
   Category2,
   Chart,
   CloseCircle,
-  Clock,
-  DocumentText,
    DollarCircle,
-    Edit2,
-    Receipt2,
-    Trash,
+     Edit2,
+     Trash,
+
    WalletAdd,
 
 } from 'iconsax-react-native';
 import { getTheme } from '@/core/theme/colors';
-import { edgeApi, idempotencyKey, type Account, type Budget, type Category as ApiCategory, type Debt, type SavingGoal } from '@/core/lib/edge-api';
+import { edgeApi, idempotencyKey, type Account, type BudgetCycleSummary, type Category as ApiCategory, type Debt, type SavingGoal, type SavingsRecommendations } from '@/core/lib/edge-api';
 import { summarizeInstallmentDue } from '@/core/lib/installment';
-import { currentYearMonth, dueLabel, formatLongDate, monthProgress, monthlyNeeded, todayIso } from '@/core/lib/dates';
+import { dueLabel, formatLongDate, monthlyNeeded, todayIso } from '@/core/lib/dates';
 import { formatCurrency } from '@/core/utils/formatters';
 import type { InstallmentPlan } from '@/types/debt';
 
@@ -49,9 +48,10 @@ export type ManageSection = 'accounts' | 'budget' | 'savings' | 'debts' | 'categ
 
 interface ManageScreenProps {
   onOpen?: (section: ManageSection) => void;
+  settingsSection?: ManageSection;
 }
 
-type DeleteTarget = { kind: 'account' | 'category'; id: string; name: string; version: number };
+type DeleteTarget = { kind: 'account' | 'category' | 'savings' | 'debt'; id: string; name: string; version: number };
 type EditTarget = DeleteTarget;
 
 interface SavingsItem {
@@ -62,6 +62,18 @@ interface SavingsItem {
   savedAmount: number;
 }
 
+interface DebtItem {
+  id: string;
+  name: string;
+  totalAmount: number;
+  remainingAmount: number;
+  monthlyAmount: number;
+  paidInstallments: number;
+  tenorMonths: number;
+  dueLabel: string;
+  dueStatus: 'paid' | 'overdue' | 'due_soon' | 'active' | 'upcoming';
+}
+
 const FORM_COPY: Record<FormKind, { title: string; placeholder: string; buttonText: string }> = {
   account: { title: 'Tambah Akun Pembayaran', placeholder: 'Contoh: Bank BCA / E-Wallet', buttonText: 'Simpan Akun' },
   budget: { title: 'Atur Limit Budget Bulan Ini', placeholder: 'Contoh: 5000000', buttonText: 'Simpan Limit Budget' },
@@ -70,20 +82,22 @@ const FORM_COPY: Record<FormKind, { title: string; placeholder: string; buttonTe
   category: { title: 'Tambah Kategori Transaksi', placeholder: 'Contoh: Kesehatan', buttonText: 'Simpan Kategori' },
 };
 
-const SAVINGS_CARD_WIDTH = 148;
-const SAVINGS_CARD_GAP = 10;
-
-export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
+export function ManageScreen({ onOpen: _onOpen, settingsSection }: ManageScreenProps) {
   const theme = getTheme(useColorScheme());
   const [form, setForm] = useState<FormKind | null>(null);
-  const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const [categoryType, setCategoryType] = useState<ApiCategory['type']>('EXPENSE');
   const [savingsIndex, setSavingsIndex] = useState(0);
+  const [debtIndex, setDebtIndex] = useState(0);
   const [value, setValue] = useState('');
   const [accountName, setAccountName] = useState('');
   const [accountBalance, setAccountBalance] = useState('');
+  const [accountKind, setAccountKind] = useState<Account['kind']>('CASH');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [accountDefault, setAccountDefault] = useState(false);
   const [savingsName, setSavingsName] = useState('');
   const [savingsTargetAmount, setSavingsTargetAmount] = useState('');
   const [savingsTargetDate, setSavingsTargetDate] = useState('');
+  const [savingsRecurrence, setSavingsRecurrence] = useState<'' | 'MONTH_1' | 'MONTH_3' | 'MONTH_6' | 'YEAR_1'>('');
   const [debtName, setDebtName] = useState('');
   const [debtAmount, setDebtAmount] = useState('');
   const [debtPaidMonths, setDebtPaidMonths] = useState('0');
@@ -91,11 +105,13 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
   const [datePickerTarget, setDatePickerTarget] = useState<'savings' | 'debt' | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<ApiCategory[]>([]);
-  const [budget, setBudget] = useState<Budget | null>(null);
+  const [budget, setBudget] = useState<BudgetCycleSummary | null>(null);
   const [debts, setDebts] = useState<Debt[]>([]);
   const [goals, setGoals] = useState<SavingGoal[]>([]);
+  const [savingsRecommendations, setSavingsRecommendations] = useState<SavingsRecommendations | null>(null);
   const [debtTenor, setDebtTenor] = useState('12');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
@@ -103,41 +119,60 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
   const [deleteError, setDeleteError] = useState('');
   const [error, setError] = useState('');
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (mode: boolean | 'silent' = false) => {
+    if (mode === true) setRefreshing(true);
+    else if (mode !== 'silent') setLoading(true);
     setError('');
     try {
-      const [accountResult, categoryResult, budgetResult, goalResult, debtResult] = await Promise.all([edgeApi.accounts(), edgeApi.categories(), edgeApi.budget().catch(() => ({ data: null })), edgeApi.goals(), edgeApi.debts()]);
+      const [accountResult, categoryResult, budgetResult, goalResult, debtResult, recommendationResult] = await Promise.all([edgeApi.accounts(), edgeApi.categories(), edgeApi.budgetCycle().catch(() => null), edgeApi.goals(), edgeApi.debts(), edgeApi.savingsRecommendations().catch(() => null)]);
       setAccounts(accountResult.data);
       setCategories(categoryResult.data);
-      setBudget(budgetResult.data);
+      setBudget(budgetResult);
       setGoals(goalResult.data);
       setDebts(debtResult.data);
+      setSavingsRecommendations(recommendationResult);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Gagal memuat data server.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
-    Promise.all([edgeApi.accounts(), edgeApi.categories(), edgeApi.budget().catch(() => ({ data: null })), edgeApi.goals(), edgeApi.debts()]).then(([accountResult, categoryResult, budgetResult, goalResult, debtResult]) => {
+    Promise.all([edgeApi.accounts(), edgeApi.categories(), edgeApi.budgetCycle().catch(() => null), edgeApi.goals(), edgeApi.debts(), edgeApi.savingsRecommendations().catch(() => null)]).then(([accountResult, categoryResult, budgetResult, goalResult, debtResult, recommendationResult]) => {
       setAccounts(accountResult.data);
       setCategories(categoryResult.data);
-      setBudget(budgetResult.data);
+      setBudget(budgetResult);
       setGoals(goalResult.data);
       setDebts(debtResult.data);
+      setSavingsRecommendations(recommendationResult);
     }).catch((cause) => setError(cause instanceof Error ? cause.message : 'Gagal memuat data server.')).finally(() => setLoading(false));
   }, []);
 
   const savingsItems: SavingsItem[] = goals.length
     ? goals.map((goal) => ({ id: goal.id, name: goal.name, targetAmount: goal.target_amount, targetDate: goal.target_date ?? undefined, savedAmount: goal.saved_amount }))
     : [{ id: 'empty', name: 'Tambah target', targetAmount: 0, savedAmount: 0 }];
-  const budgetLimit = budget?.total_limit ?? 0;
-  const budgetUsed = budget?.used_amount ?? 0;
-  const budgetRemaining = budget?.remaining_amount ?? 0;
-  const budgetPercent = Math.min(Math.round(budget?.percent_used ?? 0), 100);
-  const monthMeta = monthProgress(currentYearMonth());
+  const debtItems: DebtItem[] = debts.length
+    ? debts.map((item) => {
+        const plan = item.installment_plan as InstallmentPlan;
+        const due = summarizeInstallmentDue(plan);
+        return {
+          id: item.id,
+          name: item.name,
+          totalAmount: item.total_amount,
+          remainingAmount: item.remaining_amount,
+          monthlyAmount: plan?.monthly_amount ?? 0,
+          paidInstallments: plan?.paid_installments ?? 0,
+          tenorMonths: plan?.tenor_months ?? 0,
+          dueLabel: due?.due_label ?? '-',
+          dueStatus: due?.status ?? 'upcoming',
+        };
+      })
+    : [{ id: 'empty', name: 'Tambah utang', totalAmount: 0, remainingAmount: 0, monthlyAmount: 0, paidInstallments: 0, tenorMonths: 0, dueLabel: '-', dueStatus: 'upcoming' }];
+  const budgetUsed = budget?.totals.actual_expense ?? 0;
+  const budgetRemaining = budget?.totals.safe_to_spend ?? 0;
+  const budgetPercent = budget?.cycle.planned_income ? Math.min(Math.round(budgetUsed / budget.cycle.planned_income * 100), 100) : 0;
   const activeGoal = savingsItems[savingsIndex];
   const activeGoalRemaining = activeGoal ? Math.max(activeGoal.targetAmount - activeGoal.savedAmount, 0) : 0;
   const activeGoalLabel = activeGoal?.targetAmount && activeGoal.targetDate
@@ -148,6 +183,12 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
   const activeGoalMonthlyNeeded = activeGoal?.targetAmount && activeGoal.targetDate
     ? monthlyNeeded(activeGoalRemaining, activeGoal.targetDate)
     : 0;
+  const activeDebt = debtItems[debtIndex];
+  const totalDebt = debts.reduce((total, item) => total + item.remaining_amount, 0);
+  const nearestDebt = debtItems.filter((item) => item.id !== 'empty' && item.remainingAmount > 0).sort((a, b) => ({ overdue: 0, due_soon: 1, active: 2, upcoming: 2, paid: 3 }[a.dueStatus] - { overdue: 0, due_soon: 1, active: 2, upcoming: 2, paid: 3 }[b.dueStatus]))[0];
+  const savingsPlan = (savingsRecommendations?.goals ?? []).reduce<{ remaining: number; items: (SavingsRecommendations['goals'][number] & { suggested: number })[] }>((plan, goal) => { const suggested = Math.min(goal.required_monthly ?? 0, goal.remaining_amount, plan.remaining); return { remaining: plan.remaining - suggested, items: suggested > 0 ? [...plan.items, { ...goal, suggested }] : plan.items }; }, { remaining: savingsRecommendations?.capacity.safe_now ?? 0, items: [] }).items;
+
+  const openSection = (section: ManageSection) => router.push({ pathname: '/manage-section', params: { section } });
 
   const openDatePicker = (target: 'savings' | 'debt') => {
     setDatePickerTarget(target);
@@ -163,11 +204,16 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
     setEditTarget(null);
     setError('');
     setValue('');
+    setCategoryType('EXPENSE');
     setAccountName('');
     setAccountBalance('');
+    setAccountKind('CASH');
+    setAccountNumber('');
+    setAccountDefault(false);
     setSavingsName('');
     setSavingsTargetAmount('');
     setSavingsTargetDate('');
+    setSavingsRecurrence('');
     setDebtName('');
     setDebtAmount('');
     setDebtPaidMonths('0');
@@ -180,9 +226,31 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
     setError('');
     setEditTarget(target);
     if (target.kind === 'account') {
-      setAccountName(target.name);
+      const account = accounts.find((item) => item.id === target.id);
+      setAccountName(account?.name ?? target.name);
       setAccountBalance('');
-    } else setValue(target.name);
+      setAccountKind(account?.kind ?? 'CASH');
+      setAccountNumber(account?.account_number ?? '');
+      setAccountDefault(account?.is_default ?? false);
+    } else if (target.kind === 'category') {
+      const category = categories.find((item) => item.id === target.id);
+      setValue(target.name);
+      setCategoryType(category?.type ?? 'EXPENSE');
+    } else if (target.kind === 'savings') {
+      const goal = goals.find((item) => item.id === target.id);
+      setSavingsName(goal?.name ?? target.name);
+      setSavingsTargetAmount(String(goal?.target_amount ?? ''));
+      setSavingsTargetDate(goal?.target_date ?? '');
+      setSavingsRecurrence(goal?.recurrence_unit ? `${goal.recurrence_unit}_${goal.recurrence_interval}` as typeof savingsRecurrence : '');
+    } else {
+      const debt = debts.find((item) => item.id === target.id);
+      const plan = debt?.installment_plan as InstallmentPlan | undefined;
+      setDebtName(debt?.name ?? target.name);
+      setDebtAmount(String(debt?.total_amount ?? ''));
+      setDebtTenor(String(plan?.tenor_months ?? 12));
+      setDebtPaidMonths(String(plan?.paid_installments ?? 0));
+      setDebtStartDate(plan?.start_date ?? todayIso());
+    }
     setForm(target.kind);
   };
   const closeForm = () => {
@@ -202,8 +270,10 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
     setDeleteError('');
     try {
       if (deleteTarget.kind === 'account') await edgeApi.deleteAccount(deleteTarget.id, deleteTarget.version);
-      else await edgeApi.deleteCategory(deleteTarget.id, deleteTarget.version);
-      await load();
+      else if (deleteTarget.kind === 'category') await edgeApi.deleteCategory(deleteTarget.id, deleteTarget.version);
+      else if (deleteTarget.kind === 'savings') await edgeApi.deleteGoal(deleteTarget.id, deleteTarget.version);
+      else await edgeApi.deleteDebt(deleteTarget.id, deleteTarget.version);
+      await load('silent');
       setDeleteTarget(null);
     } catch (cause) {
       setDeleteError(cause instanceof Error ? cause.message : 'Gagal menghapus data.');
@@ -218,24 +288,34 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
     setError('');
     try {
       if (form === 'account') {
-        if (editTarget) await edgeApi.updateAccount(editTarget.id, accountName.trim(), editTarget.version);
+        const metadata = { name: accountName.trim(), kind: accountKind, is_default: accountDefault, account_number: accountNumber.trim() || null, icon: accountKind.toLowerCase() };
+        if (editTarget) await edgeApi.updateAccount(editTarget.id, metadata, editTarget.version);
         else {
           const openingBal = Number(accountBalance.replace(/\D/g, '')) || 0;
-          await edgeApi.createAccount({ name: accountName.trim(), kind: 'BANK', opening_balance: openingBal }, idempotencyKey('account'));
+          await edgeApi.createAccount({ ...metadata, opening_balance: openingBal }, idempotencyKey('account'));
         }
       }
-      if (form === 'budget') await edgeApi.upsertBudget(Number(value.replace(/\D/g, '')), budget?.version);
-      if (form === 'savings') await edgeApi.createGoal({ name: savingsName.trim(), target_amount: Number(savingsTargetAmount), target_date: savingsTargetDate || null }, idempotencyKey('goal'));
+      if (form === 'budget') throw new Error('Pengaturan budget tersedia di halaman Budget.');
+      if (form === 'savings') {
+        const [recurrence_unit, recurrence] = savingsRecurrence.split('_') as ['MONTH' | 'YEAR', string];
+        const body = { name: savingsName.trim(), target_amount: Number(savingsTargetAmount), target_date: savingsTargetDate || null, recurrence_unit: recurrence_unit || null, recurrence_interval: recurrence ? Number(recurrence) as 1 | 3 | 6 : null };
+        if (editTarget) await edgeApi.updateGoal(editTarget.id, body, editTarget.version);
+      }
       if (form === 'debt') {
         const tenor = Math.max(1, Number(debtTenor));
-        await edgeApi.createDebt({ name: debtName.trim(), total_amount: Number(debtAmount), tenor_months: tenor, paid_installments: Math.min(tenor, Math.max(0, Number(debtPaidMonths))), start_date: debtStartDate }, idempotencyKey('debt'));
+        const body = { name: debtName.trim(), total_amount: Number(debtAmount), tenor_months: tenor, paid_installments: Math.min(tenor, Math.max(0, Number(debtPaidMonths))), start_date: debtStartDate };
+        if (editTarget) {
+          const { paid_installments: _, ...metadata } = body;
+          await edgeApi.updateDebt(editTarget.id, metadata, editTarget.version);
+        } else await edgeApi.createDebt(body, idempotencyKey('debt'));
       }
       if (form === 'category') {
         if (editTarget) await edgeApi.updateCategory(editTarget.id, value.trim(), editTarget.version);
-        else await edgeApi.createCategory({ name: value.trim(), type: 'EXPENSE' }, idempotencyKey('category'));
+        else await edgeApi.createCategory({ name: value.trim(), type: categoryType }, idempotencyKey('category'));
       }
-      await load();
+      await load('silent');
       setSavingsIndex(0);
+      setDebtIndex(0);
       closeForm();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Gagal menyimpan data.');
@@ -246,47 +326,94 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
 
   return (
     <>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} colors={[theme.accent]} tintColor={theme.deepTeal} progressBackgroundColor={theme.cardBackground} />}
+      >
         <Animated.View entering={FadeInDown.duration(320)} layout={LinearTransition.springify()} style={styles.header}>
-          <Text style={[styles.title, { color: theme.textPrimary }]}>Kelola</Text>
-          <Text style={[styles.subtitle, { color: theme.textMuted }]}>Widget finansialmu.</Text>
+          <Text style={[styles.title, { color: theme.textPrimary }]}>{settingsSection ? ({ accounts: 'Akun', budget: 'Budget', savings: 'Tabungan', debts: 'Utang', categories: 'Kategori' }[settingsSection]) : 'Kelola'}</Text>
+          <Text style={[styles.subtitle, { color: theme.textMuted }]}>{settingsSection ? 'Atur data dan detailnya.' : 'Widget finansialmu.'}</Text>
           {loading ? <ActivityIndicator color={theme.primary} style={{ marginTop: 8 }} /> : null}
           {error ? (
             <View style={styles.errorContainer}>
               <Text style={[styles.errorText, { color: theme.expense }]}>{error}</Text>
-              <TouchableOpacity activeOpacity={0.7} style={[styles.retryBtn, { backgroundColor: theme.surfaceElement, borderColor: theme.border }]} onPress={load}>
+              <TouchableOpacity activeOpacity={0.7} style={[styles.retryBtn, { backgroundColor: theme.surfaceElement, borderColor: theme.border }]} onPress={() => void load()}>
                 <Text style={[styles.retryText, { color: theme.primary }]} weight="semibold">Coba Lagi</Text>
               </TouchableOpacity>
             </View>
           ) : null}
         </Animated.View>
 
-        <Animated.View entering={FadeInDown.delay(60).duration(320)} layout={LinearTransition.springify()}>
-          <View style={[styles.widget, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-            <SectionHeader
-              icon={Bank}
-              title="Akun"
-              subtitle={`${accounts.length} akun aktif`}
-              theme={theme}
-              onAdd={() => openForm('account')}
-            />
-            <View style={styles.widgetBody}>
-               {accounts.map((item) => (
-                 <InlineRow key={item.id} label={item.name} value={formatCurrency(item.balance)} theme={theme} onEdit={() => openEdit({ kind: 'account', id: item.id, name: item.name, version: item.version })} onDelete={() => openDelete({ kind: 'account', id: item.id, name: item.name, version: item.version })} />
-               ))}
+        <Animated.View entering={FadeInDown.delay(60).duration(320)} layout={LinearTransition.springify()} style={settingsSection && settingsSection !== 'accounts' ? styles.hidden : undefined}>
+          {settingsSection === 'accounts' ? (
+            <View style={styles.accountSettings}>
+              <Card variant="teal" style={styles.accountSummary}>
+                <Text style={[styles.accountSummaryLabel, { color: theme.onPrimary }]}>Total saldo akun</Text>
+                <Text style={[styles.accountSummaryValue, { color: theme.accent }]} weight="bold">{formatCurrency(accounts.reduce((total, item) => total + item.balance, 0))}</Text>
+                <Text style={[styles.accountSummaryMeta, { color: theme.onPrimary }]}>{accounts.length} akun aktif</Text>
+              </Card>
 
+              <View style={styles.accountListHeader}>
+                <Text style={[styles.accountListTitle, { color: theme.textPrimary }]} weight="bold">Daftar akun</Text>
+                <TouchableOpacity onPress={() => openForm('account')} style={[styles.accountAddButton, { backgroundColor: theme.deepTeal }]}>
+                  <Add color={theme.accent} size={17} variant="Bold" />
+                  <Text style={[styles.accountAddText, { color: theme.onPrimary }]} weight="bold">Tambah</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.accountList}>
+                {accounts.map((item) => {
+                  const kindLabel = { CASH: 'Tunai', BANK: 'Bank', E_WALLET: 'E-Wallet', INVESTMENT: 'Investasi / Aset' }[item.kind];
+                  const maskedNumber = item.account_number ? `•••• ${item.account_number.slice(-4)}` : kindLabel;
+                  return (
+                    <TouchableOpacity key={item.id} activeOpacity={0.82} onPress={() => openEdit({ kind: 'account', id: item.id, name: item.name, version: item.version })}>
+                      <Card variant="default" style={[styles.accountItem, { borderColor: theme.border }]}>
+                        <View style={[styles.accountItemIcon, { backgroundColor: theme.surfaceElement }]}><Bank color={theme.deepTeal} size={21} variant="Bold" /></View>
+                        <View style={styles.accountItemCopy}>
+                          <View style={styles.accountItemNameRow}>
+                            <Text style={[styles.accountItemName, { color: theme.textPrimary }]} weight="bold" numberOfLines={1}>{item.name}</Text>
+                            <View style={[styles.defaultBadge, { backgroundColor: item.is_default ? theme.accent : theme.surfaceElement }]}>
+                              <Text style={[styles.defaultBadgeText, { color: item.is_default ? theme.deepTeal : theme.textMuted }]} weight="bold">{item.is_default ? 'UTAMA' : 'BIASA'}</Text>
+                            </View>
+                          </View>
+                          <View style={styles.accountMetaRow}>
+                            <View style={[styles.accountKindDot, { backgroundColor: item.kind === 'INVESTMENT' ? theme.income : item.kind === 'E_WALLET' ? theme.accent : theme.deepTeal }]} />
+                            <Text style={[styles.accountItemMeta, { color: theme.textMuted }]}>{kindLabel} · {maskedNumber}</Text>
+                          </View>
+                        </View>
+                        <View style={styles.accountItemBalance}>
+                          <Text style={[styles.accountBalanceValue, { color: theme.textPrimary }]} weight="bold">{formatCurrency(item.balance)}</Text>
+                          <View style={styles.accountItemActions}>
+                            <TouchableOpacity accessibilityLabel={`Edit ${item.name}`} hitSlop={8} style={[styles.accountActionButton, { backgroundColor: theme.surfaceElement }]} onPress={(event) => { event.stopPropagation(); openEdit({ kind: 'account', id: item.id, name: item.name, version: item.version }); }}><Edit2 color={theme.deepTeal} size={16} /></TouchableOpacity>
+                            <TouchableOpacity accessibilityLabel={`Hapus ${item.name}`} hitSlop={8} style={[styles.accountActionButton, { backgroundColor: theme.expenseSurface }]} onPress={(event) => { event.stopPropagation(); openDelete({ kind: 'account', id: item.id, name: item.name, version: item.version }); }}><Trash color={theme.expense} size={16} /></TouchableOpacity>
+                          </View>
+                        </View>
+                      </Card>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
-          </View>
+          ) : (
+            <Pressable onPress={() => openSection('accounts')} style={[styles.widget, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+              <SectionHeader icon={Bank} title="Akun" subtitle={`${accounts.length} akun aktif`} theme={theme} showDetail />
+              <View style={styles.widgetBody}>{accounts.slice(0, 3).map((item) => <InlineRow key={item.id} label={item.name} value={formatCurrency(item.balance)} theme={theme} />)}</View>
+            </Pressable>
+          )}
         </Animated.View>
 
-        <Animated.View entering={FadeInDown.delay(110).duration(320)} layout={LinearTransition.springify()}>
-          <View style={[styles.widget, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+
+        <Animated.View entering={FadeInDown.delay(110).duration(320)} layout={LinearTransition.springify()} style={settingsSection && settingsSection !== 'budget' ? styles.hidden : undefined}>
+          <Pressable disabled={!!settingsSection} onPress={() => router.push('/budget')} style={[styles.widget, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+
             <SectionHeader
               icon={Chart}
-              title="Budget bulan ini"
-              subtitle={`Hari ke-${monthMeta.day} dari ${monthMeta.days_in_month}`}
-              theme={theme}
-              onAdd={() => openForm('budget')}
+               title="Budget aktif"
+               subtitle={budget ? `${budget.cycle.start_date}–${budget.cycle.end_date}` : 'Belum diatur'}
+               theme={theme}
+
+              showDetail={!settingsSection}
             />
             <View style={styles.widgetBody}>
               <View style={[styles.track, { backgroundColor: theme.surfaceMuted }] }>
@@ -294,42 +421,87 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
               </View>
               <InlineRow label="Terpakai" value={`Rp${budgetUsed.toLocaleString('id-ID')}`} theme={theme} />
               <InlineRow label="Sisa" value={`Rp${budgetRemaining.toLocaleString('id-ID')}`} theme={theme} />
-              <InlineRow label="Pace bulan ini" value={`${budgetPercent}% · ${monthMeta.days_left} hari lagi`} theme={theme} />
+               <InlineRow label="Batas aman harian" value={formatCurrency(budget?.totals.daily_safe_limit ?? 0)} theme={theme} />
+
             </View>
-          </View>
+          </Pressable>
         </Animated.View>
 
-        <Animated.View entering={FadeInDown.delay(160).duration(320)} layout={LinearTransition.springify()} style={styles.duoRow}>
-          <View style={[styles.duoCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-            <SectionHeader
-              compact
-              hideIcon
-              icon={WalletAdd}
-              title="Tabungan"
-              subtitle={goals.length === 0 ? 'Belum ada' : `${savingsIndex + 1}/${savingsItems.length} target`}
-              theme={theme}
-              onAdd={() => openForm('savings')}
-            />
-            <SavingsDeck
-              activeIndex={savingsIndex}
-              items={savingsItems}
-              onIndexChange={setSavingsIndex}
-              onEmptyPress={() => openForm('savings')}
-              theme={theme}
-            />
-            <View style={styles.savingsMetaWrap}>
-              <Text style={[styles.savingsMetaText, { color: theme.textMuted }]} numberOfLines={1}>
-                {activeGoal?.targetAmount ? `Target ${activeGoalLabel}` : 'Belum ada target aktif'}
-              </Text>
-              {activeGoalMonthlyNeeded > 0 ? (
-                <Text style={[styles.savingsMetaText, { color: theme.textMuted }]} numberOfLines={1}>
-                  Ideal Rp{activeGoalMonthlyNeeded.toLocaleString('id-ID')} / bulan
-                </Text>
-              ) : null}
+        <Animated.View entering={FadeInDown.delay(160).duration(320)} layout={LinearTransition.springify()} style={[styles.duoRow, settingsSection && settingsSection !== 'savings' && settingsSection !== 'debts' ? styles.hidden : undefined]}>
+          {settingsSection === 'savings' ? (
+            <View style={[styles.savingsSettings, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+              <SectionHeader hideIcon icon={WalletAdd} title="Target tabungan" subtitle={`${goals.length} target tersimpan`} theme={theme} />
+              <Button title="Tambah target tabungan" variant="lime" icon={<Add color={theme.deepTeal} size={18} variant="Bold" />} onPress={() => router.push('/savings-setup')} />
+              <View style={styles.goalList}>
+                {goals.map((goal) => {
+                  const goalProgress = goal.target_amount > 0 ? Math.min(goal.saved_amount / goal.target_amount, 1) : 0;
+                  const status = goal.lifecycle_status === 'FUNDED' ? 'Selesai' : goal.lifecycle_status === 'PAUSED' ? 'Dijeda' : goal.lifecycle_status === 'CANCELLED' ? 'Dibatalkan' : goal.lifecycle_status === 'ARCHIVED' ? 'Diarsipkan' : 'Aktif';
+                  const priority = { CRITICAL: 'Mendesak', HIGH: 'Tinggi', NORMAL: 'Normal', LOW: 'Rendah' }[goal.priority];
+                  return <TouchableOpacity key={goal.id} accessibilityRole="button" accessibilityLabel={`Buka detail ${goal.name}, ${Math.round(goalProgress * 100)} persen tercapai, status ${status}`} activeOpacity={0.82} onPress={() => router.push({ pathname: '/finance-detail', params: { id: goal.id, type: 'savings' } })}>
+                    <Card variant="default" style={[styles.goalItem, { borderColor: theme.border }]}>
+                      <View style={styles.goalHeading}><View style={styles.goalCopy}><Text style={{ color: theme.textPrimary }} weight="bold" numberOfLines={1}>{goal.name}</Text><Text style={{ color: theme.textMuted }}>{status} · Prioritas {priority}</Text></View><ArrowRight2 color={theme.textMuted} size={18} /></View>
+                      <View style={styles.goalAmounts}><Text style={{ color: theme.textPrimary }} weight="bold">{formatCurrency(goal.saved_amount)}</Text><Text style={{ color: theme.textMuted }}>dari {formatCurrency(goal.target_amount)}</Text></View>
+                      <View accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: Math.round(goalProgress * 100) }} style={[styles.track, { backgroundColor: theme.surfaceMuted }]}><View style={[styles.fill, { width: `${goalProgress * 100}%`, backgroundColor: theme.accent }]} /></View>
+                      <View style={styles.goalFooter}><Text style={{ color: theme.textMuted }}>{Math.round(goalProgress * 100)}% tercapai</Text><Text style={{ color: theme.textMuted }}>{goal.target_date ? formatLongDate(goal.target_date) : 'Tanpa tanggal'}</Text></View>
+                    </Card>
+                  </TouchableOpacity>;
+                })}
+                {!goals.length ? <Card variant="surface" style={styles.emptyGoal}><Text style={{ color: theme.textPrimary }} weight="bold">Belum ada target tabungan</Text><Text style={{ color: theme.textMuted }}>Buat satu target agar uang yang disisihkan punya tujuan jelas.</Text></Card> : null}
+              </View>
             </View>
-          </View>
+          ) : (
+            <Pressable onPress={() => openSection('savings')} accessibilityRole="button" accessibilityLabel="Buka target tabungan" style={[styles.duoCard, settingsSection === 'debts' ? styles.hidden : undefined, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+              <SectionHeader compact hideIcon icon={WalletAdd} title="Tabungan" subtitle={goals.length === 0 ? 'Belum ada' : `${savingsIndex + 1}/${savingsItems.length} target`} theme={theme} showDetail />
+              <SavingsDeck activeIndex={savingsIndex} items={savingsItems} onIndexChange={setSavingsIndex} onEmptyPress={() => router.push('/savings-setup')} onDetail={(goalId) => router.push({ pathname: '/finance-detail', params: { id: goalId, type: 'savings' } })} theme={theme} />
+              <View style={styles.savingsMetaWrap}><Text style={[styles.savingsMetaText, { color: theme.textMuted }]} numberOfLines={1}>{activeGoal?.targetAmount ? `Target ${activeGoalLabel}` : 'Belum ada target aktif'}</Text>{activeGoalMonthlyNeeded > 0 ? <Text style={[styles.savingsMetaText, { color: theme.textMuted }]} numberOfLines={1}>Ideal Rp{activeGoalMonthlyNeeded.toLocaleString('id-ID')} / bulan</Text> : null}{savingsRecommendations ? <Text style={[styles.savingsMetaText, { color: theme.income }]} weight="bold">Aman dialokasikan {formatCurrency(savingsRecommendations.capacity.safe_now)}</Text> : null}{savingsPlan.slice(0, 3).map((goal) => <View key={goal.goal_id} style={styles.savingsPlanRow}><Text style={[styles.savingsMetaText, { color: theme.textMuted }]} numberOfLines={1}>{goal.name}</Text><Text style={[styles.savingsMetaText, { color: theme.textPrimary }]} weight="bold">{formatCurrency(goal.suggested)}</Text></View>)}</View>
+            </Pressable>
+          )}
 
-          <View style={[styles.duoCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+          {settingsSection === 'debts' ? (
+            <View style={styles.debtSettings}>
+              <Card variant="teal" style={styles.debtSummary}>
+                <View style={styles.debtSummaryTop}>
+                  <View style={[styles.debtSummaryIcon, { backgroundColor: theme.accent }]}><CardReceive color={theme.deepTeal} size={22} variant="Bold" /></View>
+                  <View style={[styles.debtSummaryBadge, { backgroundColor: theme.surfaceElement }]}><Text style={[styles.debtSummaryBadgeText, { color: theme.deepTeal }]} weight="bold">{debts.length} UTANG</Text></View>
+                </View>
+                <Text style={[styles.debtSummaryLabel, { color: theme.onPrimary }]}>Total kewajiban tersisa</Text>
+                <Text style={[styles.debtSummaryValue, { color: theme.accent }]} weight="bold">{formatCurrency(totalDebt)}</Text>
+                <View style={styles.debtSummaryFooter}>
+                  <Text style={[styles.debtSummaryMeta, { color: theme.onPrimary }]}>{nearestDebt ? `Terdekat ${formatCurrency(nearestDebt.monthlyAmount)}` : 'Belum ada pembayaran terjadwal'}</Text>
+                  <Text style={[styles.debtSummaryMeta, { color: theme.onPrimary }]}>{nearestDebt?.dueLabel ?? '—'}</Text>
+                </View>
+              </Card>
+
+              <View style={styles.debtListHeader}>
+                <View style={styles.debtListHeading}><Text style={[styles.debtListTitle, { color: theme.textPrimary }]} weight="bold">Daftar hutang</Text><Text style={[styles.debtListSubtitle, { color: theme.textMuted }]}>Pantau sisa dan cicilan berikutnya</Text></View>
+                <TouchableOpacity onPress={() => openForm('debt')} style={[styles.accountAddButton, { backgroundColor: theme.deepTeal }]}><Add color={theme.accent} size={17} variant="Bold" /><Text style={[styles.accountAddText, { color: theme.onPrimary }]} weight="bold">Tambah</Text></TouchableOpacity>
+              </View>
+
+              <View style={styles.debtList}>
+                {debts.map((item) => {
+                  const plan = item.installment_plan as InstallmentPlan;
+                  const due = summarizeInstallmentDue(plan);
+                  const progress = item.total_amount > 0 ? Math.min(item.paid_amount / item.total_amount, 1) : 0;
+                  const statusLabel = item.status === 'paid' ? 'Lunas' : due?.status === 'overdue' ? 'Terlambat' : due?.status === 'due_soon' ? 'Segera jatuh tempo' : 'Aktif';
+                  const statusColor = item.status === 'paid' ? theme.income : due?.status === 'overdue' ? theme.expense : due?.status === 'due_soon' ? theme.warning : theme.deepTeal;
+                  const statusSurface = item.status === 'paid' ? theme.incomeSurface : due?.status === 'overdue' ? theme.expenseSurface : due?.status === 'due_soon' ? theme.warningSurface : theme.surfaceElement;
+                  return <TouchableOpacity key={item.id} accessibilityRole="button" accessibilityLabel={`Buka detail ${item.name}, sisa ${formatCurrency(item.remaining_amount)}, status ${statusLabel}`} activeOpacity={0.84} onPress={() => router.push({ pathname: '/finance-detail', params: { id: item.id, type: 'debt' } })}>
+                    <Card variant="default" style={[styles.debtItem, { borderColor: theme.border }]}>
+                      <View style={styles.debtItemTop}>
+                        <View style={[styles.debtItemIcon, { backgroundColor: statusSurface }]}><CardReceive color={statusColor} size={20} variant="Bold" /></View>
+                        <View style={styles.debtItemCopy}><Text style={[styles.debtItemName, { color: theme.textPrimary }]} weight="bold" numberOfLines={1}>{item.name}</Text><View style={[styles.debtStatusChip, { backgroundColor: statusSurface }]}><Text style={[styles.debtStatusText, { color: statusColor }]} weight="bold">{statusLabel}</Text></View></View>
+                        <ArrowRight2 color={theme.textMuted} size={18} />
+                      </View>
+                      <View style={styles.debtAmountRow}><View><Text style={[styles.debtAmountLabel, { color: theme.textMuted }]}>Sisa hutang</Text><Text style={[styles.debtItemAmount, { color: theme.textPrimary }]} weight="bold">{formatCurrency(item.remaining_amount)}</Text></View><View style={styles.debtPaidCopy}><Text style={[styles.debtAmountLabel, { color: theme.textMuted }]}>Sudah dibayar</Text><Text style={[styles.debtPaidAmount, { color: theme.income }]} weight="bold">{formatCurrency(item.paid_amount)}</Text></View></View>
+                      <View accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: Math.round(progress * 100) }} style={[styles.track, { backgroundColor: theme.surfaceMuted }]}><View style={[styles.fill, { width: `${progress * 100}%`, backgroundColor: theme.accent }]} /></View>
+                      <View style={styles.debtItemFooter}><View style={styles.debtFooterCopy}><Text style={[styles.debtFooterStrong, { color: theme.textPrimary }]} weight="bold">{formatCurrency(plan?.monthly_amount ?? 0)} / bulan</Text><Text style={[styles.debtFooterMuted, { color: statusColor }]}>{due?.due_label ?? 'Jadwal belum tersedia'}</Text></View><View style={styles.accountItemActions}><TouchableOpacity accessibilityLabel={`Edit ${item.name}`} hitSlop={8} style={[styles.accountActionButton, { backgroundColor: theme.surfaceElement }]} onPress={(event) => { event.stopPropagation(); openEdit({ kind: 'debt', id: item.id, name: item.name, version: item.version }); }}><Edit2 color={theme.deepTeal} size={16} /></TouchableOpacity><TouchableOpacity accessibilityLabel={`Hapus ${item.name}`} hitSlop={8} style={[styles.accountActionButton, { backgroundColor: theme.expenseSurface }]} onPress={(event) => { event.stopPropagation(); openDelete({ kind: 'debt', id: item.id, name: item.name, version: item.version }); }}><Trash color={theme.expense} size={16} /></TouchableOpacity></View></View>
+                    </Card>
+                  </TouchableOpacity>;
+                })}
+                {!debts.length ? <Card variant="surface" style={styles.emptyDebt}><View style={[styles.emptyDebtIcon, { backgroundColor: theme.cardBackground }]}><CardReceive color={theme.deepTeal} size={22} variant="Bold" /></View><Text style={{ color: theme.textPrimary }} weight="bold">Belum ada hutang</Text><Text style={[styles.emptyDebtCopy, { color: theme.textMuted }]}>Tambahkan cicilan atau pinjaman agar pembayaran berikutnya lebih mudah dipantau.</Text><Button title="Tambah hutang pertama" size="small" variant="outline" onPress={() => openForm('debt')} /></Card> : null}
+              </View>
+            </View>
+          ) : <Pressable onPress={() => openSection('debts')} style={[styles.duoCard, settingsSection === 'savings' ? styles.hidden : undefined, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
             <SectionHeader
               compact
               hideIcon
@@ -337,126 +509,44 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
               title="Utang"
               subtitle={debts.length === 0 ? 'Opsional' : `${debts.length} aktif`}
               theme={theme}
-              onAdd={() => openForm('debt')}
+              onAdd={settingsSection ? () => openForm('debt') : undefined}
+              showDetail={!settingsSection}
             />
-            <View style={styles.debtContentWrap}>
-              {debts.length === 0 ? (
-                <Text style={[styles.debtText, { color: theme.textMuted }]} numberOfLines={2}>
-                  Tambah cicilan atau pinjaman, hitung otomatis per bulan.
+            <SavingsDeck
+              activeIndex={debtIndex}
+              items={debtItems.map((item) => ({ id: item.id, name: item.name, targetAmount: item.totalAmount, targetDate: undefined, savedAmount: item.totalAmount - item.remainingAmount }))}
+              onIndexChange={setDebtIndex}
+              onEmptyPress={() => openForm('debt')}
+              theme={theme}
+            />
+            <View style={styles.savingsMetaWrap}>
+              <Text style={[styles.savingsMetaText, { color: theme.textMuted }]} numberOfLines={1}>
+                {activeDebt?.totalAmount ? `Sisa ${formatCurrency(activeDebt.remainingAmount)}` : 'Belum ada utang aktif'}
+              </Text>
+              {activeDebt?.monthlyAmount ? (
+                <Text style={[styles.savingsMetaText, { color: theme.textMuted }]} numberOfLines={1}>
+                  {formatCurrency(activeDebt.monthlyAmount)} / bulan · {activeDebt.paidInstallments}/{activeDebt.tenorMonths} · {activeDebt.dueLabel}
                 </Text>
-              ) : (
-                <View style={{ gap: 6 }}>
-                  {debts.slice(0, 1).map((item) => {
-                    const plan = item.installment_plan as InstallmentPlan;
-                    const remaining = item.remaining_amount;
-                    const due = summarizeInstallmentDue(plan);
-                    const dueTone = due?.status === 'overdue'
-                      ? theme.expense
-                      : due?.status === 'due_soon'
-                        ? theme.accentText
-                        : theme.textMuted;
-                    return (
-                      <View key={item.id}>
-                        <Text style={[styles.debtName, { color: theme.textPrimary }]} numberOfLines={1}>
-                          {item.name}
-                        </Text>
-                        <Text style={[styles.debtAmount, { color: theme.expense }]}>
-                          Sisa Rp{remaining.toLocaleString('id-ID')}
-                        </Text>
-                        {plan ? (
-                          <>
-                            <Text style={[styles.debtMeta, { color: theme.textMuted }]} numberOfLines={1}>
-                              Rp{plan.monthly_amount.toLocaleString('id-ID')} / bulan
-                            </Text>
-                            <View style={[styles.miniTrack, { backgroundColor: theme.surfaceMuted }]}>
-                              <View
-                                style={[
-                                  styles.miniFill,
-                                  {
-                                    width: `${Math.min(100, Math.round((plan.paid_installments / plan.tenor_months) * 100))}%`,
-                                    backgroundColor: theme.deepTeal,
-                                  },
-                                ]}
-                              />
-                            </View>
-                            <Text style={[styles.debtMeta, { color: dueTone }]} numberOfLines={1}>
-                              {plan.paid_installments}/{plan.tenor_months} bulan · jatuh tempo {due?.due_label ?? '-'}
-                            </Text>
-                          </>
-                        ) : null}
-                      </View>
-                    );
-                  })}
-                  {debts.length > 1 ? (
-                    <Text style={[styles.debtMeta, { color: theme.textMuted }]}>+{debts.length - 1} lainnya</Text>
-                  ) : null}
-                </View>
-              )}
+              ) : null}
             </View>
-          </View>
+          </Pressable>}
         </Animated.View>
 
-        <Animated.View entering={FadeInDown.delay(260).duration(320)}>
-          <View style={[styles.widget, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-            <TouchableOpacity
-              activeOpacity={0.86}
-              onPress={() => setCategoriesOpen((current) => !current)}
-              style={styles.categoryHeaderClickable}
-            >
-              <View style={[styles.iconBox, { backgroundColor: theme.surfaceElement }]}>
-                <Category2 color={theme.deepTeal} size={21} variant="Bold" />
+        <Animated.View entering={FadeInDown.delay(260).duration(320)} style={settingsSection && settingsSection !== 'categories' ? styles.hidden : undefined}>
+          {settingsSection === 'categories' ? (
+            <View style={styles.categorySettings}>
+              <Card variant="teal" style={styles.categorySummary}>
+                <View style={styles.categorySummaryTop}><View style={[styles.debtSummaryIcon, { backgroundColor: theme.accent }]}><Category2 color={theme.deepTeal} size={22} variant="Bold" /></View><Text style={[styles.categorySummaryCount, { color: theme.accent }]} weight="bold">{categories.length} KATEGORI</Text></View>
+                <Text style={[styles.accountSummaryLabel, { color: theme.onPrimary }]}>Kategori transaksi aktif</Text>
+                <View style={styles.categorySummaryStats}><View><Text style={[styles.categorySummaryValue, { color: theme.onPrimary }]} weight="bold">{categories.filter((item) => item.type === 'EXPENSE').length}</Text><Text style={[styles.categorySummaryMeta, { color: theme.onPrimary }]}>Pengeluaran</Text></View><View><Text style={[styles.categorySummaryValue, { color: theme.accent }]} weight="bold">{categories.filter((item) => item.type === 'INCOME').length}</Text><Text style={[styles.categorySummaryMeta, { color: theme.onPrimary }]}>Pemasukan</Text></View></View>
+              </Card>
+              <View style={styles.accountListHeader}><Text style={[styles.accountListTitle, { color: theme.textPrimary }]} weight="bold">Daftar kategori</Text><TouchableOpacity onPress={() => openForm('category')} style={[styles.accountAddButton, { backgroundColor: theme.deepTeal }]}><Add color={theme.accent} size={17} variant="Bold" /><Text style={[styles.accountAddText, { color: theme.onPrimary }]} weight="bold">Tambah</Text></TouchableOpacity></View>
+              <View style={styles.accountList}>
+                {categories.map((category) => { const income = category.type === 'INCOME'; const surface = income ? theme.incomeSurface : theme.expenseSurface; const color = income ? theme.income : theme.expense; return <TouchableOpacity key={category.id} activeOpacity={0.82} onPress={() => openEdit({ kind: 'category', id: category.id, name: category.name, version: category.version })}><Card variant="default" style={[styles.categoryItem, { borderColor: theme.border }]}><View style={[styles.accountItemIcon, { backgroundColor: surface }]}><Category2 color={color} size={21} variant="Bold" /></View><View style={styles.accountItemCopy}><Text style={[styles.accountItemName, { color: theme.textPrimary }]} weight="bold" numberOfLines={1}>{category.name}</Text><View style={[styles.categoryTypeBadge, { backgroundColor: surface }]}><Text style={[styles.categoryTypeText, { color }]} weight="bold">{income ? 'PEMASUKAN' : 'PENGELUARAN'}</Text></View></View><View style={styles.accountItemActions}><TouchableOpacity accessibilityLabel={`Edit kategori ${category.name}`} hitSlop={8} style={[styles.accountActionButton, { backgroundColor: theme.surfaceElement }]} onPress={(event) => { event.stopPropagation(); openEdit({ kind: 'category', id: category.id, name: category.name, version: category.version }); }}><Edit2 color={theme.deepTeal} size={16} /></TouchableOpacity><TouchableOpacity accessibilityLabel={`Hapus kategori ${category.name}`} hitSlop={8} style={[styles.accountActionButton, { backgroundColor: theme.expenseSurface }]} onPress={(event) => { event.stopPropagation(); openDelete({ kind: 'category', id: category.id, name: category.name, version: category.version }); }}><Trash color={theme.expense} size={16} /></TouchableOpacity></View></Card></TouchableOpacity>; })}
+                {!categories.length ? <Card variant="surface" style={styles.emptyCategory}><View style={[styles.emptyDebtIcon, { backgroundColor: theme.cardBackground }]}><Category2 color={theme.deepTeal} size={22} variant="Bold" /></View><Text style={{ color: theme.textPrimary }} weight="bold">Belum ada kategori</Text><Text style={[styles.emptyDebtCopy, { color: theme.textMuted }]}>Tambahkan kategori agar pemasukan dan pengeluaran lebih mudah dikelompokkan.</Text><Button title="Tambah kategori pertama" size="small" variant="outline" onPress={() => openForm('category')} /></Card> : null}
               </View>
-              <View style={styles.copy}>
-                <Text style={[styles.widgetTitle, { color: theme.textPrimary }]} numberOfLines={1}>
-                  Kategori
-                </Text>
-                <Text style={[styles.widgetSubtitle, { color: theme.textMuted }]} numberOfLines={1}>
-                  {`${categories.length} kategori transaksi`}
-                </Text>
-              </View>
-              <ArrowDown2
-                color={theme.textMuted}
-                size={17}
-                style={{ transform: [{ rotate: categoriesOpen ? '180deg' : '0deg' }] }}
-              />
-            </TouchableOpacity>
-
-            {categoriesOpen && (
-              <Animated.View 
-                entering={FadeInDown.duration(180)} 
-                exiting={FadeOutUp.duration(100)}
-                style={styles.categoryBody}
-              >
-                <View style={styles.categoryRowContainer}>
-                  <ScrollView 
-                    horizontal 
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.categoryScrollContent}
-                    style={styles.categoryScrollView}
-                  >
-                    {categories.map((category) => (
-                      <View key={category.id} style={[styles.chip, { backgroundColor: theme.surfaceElement }]}>
-                        <Text style={[styles.chipText, { color: theme.textPrimary }]}>{category.name}</Text>
-                        <TouchableOpacity accessibilityLabel={`Edit kategori ${category.name}`} hitSlop={8} onPress={() => openEdit({ kind: 'category', id: category.id, name: category.name, version: category.version })}>
-                          <Edit2 color={theme.deepTeal} size={14} variant="Outline" />
-                        </TouchableOpacity>
-                        <TouchableOpacity accessibilityLabel={`Hapus kategori ${category.name}`} hitSlop={8} onPress={() => openDelete({ kind: 'category', id: category.id, name: category.name, version: category.version })}>
-                          <CloseCircle color={theme.expense} size={15} variant="Outline" />
-                        </TouchableOpacity>
-                      </View>
-                    ))}
-                  </ScrollView>
-                  <TouchableOpacity 
-                    onPress={() => openForm('category')} 
-                    style={[styles.addChipBtn, { borderColor: theme.deepTeal }]}
-                  >
-                    <Add color={theme.deepTeal} size={15} variant="Bold" />
-                    <Text style={[styles.addChipText, { color: theme.deepTeal }]}>Tambah</Text>
-                  </TouchableOpacity>
-                </View>
-              </Animated.View>
-            )}
-          </View>
+            </View>
+          ) : <Pressable onPress={() => openSection('categories')} style={[styles.widget, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}><SectionHeader icon={Category2} title="Kategori" subtitle={`${categories.length} kategori transaksi`} theme={theme} showDetail /></Pressable>}
         </Animated.View>
       </ScrollView>
 
@@ -467,12 +557,17 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
               <View style={[styles.deleteIcon, { backgroundColor: theme.expenseSurface }]}>
                 <Trash color={theme.expense} size={24} variant="Outline" />
               </View>
-              <Text style={[styles.confirmTitle, { color: theme.textPrimary }]} weight="bold">Hapus {deleteTarget?.kind === 'account' ? 'akun' : 'kategori'}?</Text>
+              <Text style={[styles.confirmTitle, { color: theme.textPrimary }]} weight="bold">Hapus {deleteTarget?.kind === 'account' ? 'akun' : deleteTarget?.kind === 'category' ? 'kategori' : deleteTarget?.kind === 'savings' ? 'target tabungan' : 'utang'}?</Text>
               <Text style={[styles.confirmMessage, { color: theme.textSecondary }]}>
                 {deleteTarget?.kind === 'account'
                   ? `Akun “${deleteTarget.name}” hanya dapat dihapus jika bukan akun default, saldo nol, dan belum dipakai transaksi aktif.`
-                  : `Kategori “${deleteTarget?.name ?? ''}” akan disembunyikan dari pilihan baru. Histori transaksi tetap tersimpan.`}
+                  : deleteTarget?.kind === 'category'
+                    ? `Kategori “${deleteTarget?.name ?? ''}” akan disembunyikan dari pilihan baru. Histori transaksi tetap tersimpan.`
+                    : deleteTarget?.kind === 'savings'
+                      ? `Target tabungan “${deleteTarget?.name ?? ''}” akan dihapus dari daftar kelola.`
+                      : `Utang “${deleteTarget?.name ?? ''}” akan dihapus dari daftar kelola.`}
               </Text>
+
               {deleteError ? <Text style={[styles.confirmError, { color: theme.expense }]}>{deleteError}</Text> : null}
               <View style={styles.confirmActions}>
                 <Button title="Batal" variant="outline" disabled={deleting} onPress={closeDelete} style={styles.confirmButton} />
@@ -503,6 +598,9 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
 
             <KeyboardAwareScrollView
               enableOnAndroid
+              enableAutomaticScroll={false}
+              extraHeight={0}
+              extraScrollHeight={0}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.sheetScrollContent}
@@ -701,7 +799,13 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
                     </TouchableOpacity>
                   </View>
 
-                  {/* Live Estimation Card for Savings */}
+                  <View style={styles.fieldBlock}>
+                    <Text style={[styles.fieldLabelText, { color: theme.textMuted }]} weight="bold">ULANGI SETIAP</Text>
+                    <View style={styles.accountKindGrid}>{([['', 'Tidak berulang'], ['MONTH_1', '1 bulan'], ['MONTH_3', '3 bulan'], ['MONTH_6', '6 bulan'], ['YEAR_1', '1 tahun']] as const).map(([preset, label]) => <TouchableOpacity key={label} accessibilityRole="radio" accessibilityState={{ selected: savingsRecurrence === preset }} onPress={() => setSavingsRecurrence(preset)} style={[styles.dateButton, { borderColor: savingsRecurrence === preset ? theme.primary : theme.border, backgroundColor: theme.surfaceElement }]}><Text style={{ color: theme.textPrimary }}>{label}</Text></TouchableOpacity>)}</View>
+                  </View>
+
+
+
                   {Number(savingsTargetAmount) > 0 ? (
                     <View style={[styles.summaryCard, { backgroundColor: theme.surfaceElement, borderColor: theme.border }]}>
                       <View style={styles.summaryRow}>
@@ -739,6 +843,34 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
                       />
                     </View>
                   </View>
+
+                  <View style={styles.fieldBlock}>
+                    <Text style={[styles.fieldLabelText, { color: theme.textMuted }]} weight="bold">JENIS AKUN</Text>
+                    <View style={styles.accountKindGrid}>
+                      {([
+                        ['CASH', 'Tunai'],
+                        ['BANK', 'Bank'],
+                        ['E_WALLET', 'E-Wallet'],
+                        ['INVESTMENT', 'Investasi / Aset'],
+                      ] as const).map(([kind, label]) => (
+                        <TouchableOpacity key={kind} onPress={() => setAccountKind(kind)} style={[styles.accountKindButton, { backgroundColor: accountKind === kind ? theme.deepTeal : theme.surfaceElement, borderColor: accountKind === kind ? theme.deepTeal : theme.border }]}>
+                          <Text style={[styles.accountKindText, { color: accountKind === kind ? theme.onPrimary : theme.textPrimary }]} weight="bold">{label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+
+                  <View style={styles.fieldBlock}>
+                    <Text style={[styles.fieldLabelText, { color: theme.textMuted }]} weight="bold">NOMOR AKUN (OPSIONAL)</Text>
+                    <View style={[styles.inputWithIcon, { borderColor: theme.border, backgroundColor: theme.surfaceElement }]}>
+                      <CardReceive color={theme.textSecondary} size={20} variant="Outline" />
+                      <TextInput value={accountNumber} onChangeText={setAccountNumber} maxLength={64} placeholder="Nomor rekening / ID wallet" placeholderTextColor={theme.textMuted} style={[styles.flexInput, { color: theme.textPrimary }]} />
+                    </View>
+                  </View>
+
+                  <TouchableOpacity onPress={() => setAccountDefault((value) => !value)} style={[styles.defaultToggle, { backgroundColor: accountDefault ? theme.deepTeal : theme.surfaceElement, borderColor: accountDefault ? theme.deepTeal : theme.border }]}>
+                    <Text style={{ color: accountDefault ? theme.onPrimary : theme.textPrimary }} weight="bold">{accountDefault ? 'Akun utama' : 'Jadikan akun utama'}</Text>
+                  </TouchableOpacity>
 
                   {!editTarget ? (
                     <View style={styles.fieldBlock}>
@@ -780,13 +912,17 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
                         autoFocus
                         value={value}
                         onChangeText={setValue}
-                        keyboardType={form === 'budget' ? 'numeric' : 'default'}
-                        placeholder={form ? FORM_COPY[form].placeholder : ''}
+                         keyboardType={form === 'budget' ? 'numeric' : 'default'}
+                         maxLength={form === 'category' ? 100 : undefined}
+                         placeholder={form ? FORM_COPY[form].placeholder : ''}
                         placeholderTextColor={theme.textMuted}
                         style={[styles.flexInput, { color: theme.textPrimary }]}
                       />
                     </View>
-                    {form === 'budget' && Number(value.replace(/\D/g, '')) > 0 ? (
+                     {form === 'category' ? <View style={styles.categoryTypeOptions}>{(['EXPENSE', 'INCOME'] as const).map((type) => { const selected = categoryType === type; return <TouchableOpacity key={type} disabled={!!editTarget} onPress={() => setCategoryType(type)} style={[styles.categoryTypeOption, { borderColor: selected ? theme.deepTeal : theme.border, backgroundColor: selected ? theme.surfaceElement : theme.cardBackground, opacity: editTarget && !selected ? 0.45 : 1 }]}><Text style={{ color: selected ? theme.deepTeal : theme.textMuted }} weight="bold">{type === 'EXPENSE' ? 'Pengeluaran' : 'Pemasukan'}</Text></TouchableOpacity>; })}</View> : null}
+                     {form === 'category' && editTarget ? <Text style={[styles.inputHelperText, { color: theme.textMuted }]}>Tipe kategori tidak dapat diubah setelah dibuat.</Text> : null}
+                     {form === 'budget' && Number(value.replace(/\D/g, '')) > 0 ? (
+
                       <Text style={[styles.inputHelperText, { color: theme.accentText }]} weight="semibold">
                         = {formatCurrency(Number(value.replace(/\D/g, '')))}
                       </Text>
@@ -807,9 +943,16 @@ export function ManageScreen({ onOpen: _onOpen }: ManageScreenProps) {
                   },
                 ]}
               >
-                <Text style={{ color: (form === 'debt' ? (debtName.trim() && debtAmount.trim()) : form === 'savings' ? (savingsName.trim() && savingsTargetAmount.trim()) : form === 'account' ? accountName.trim() : value.trim()) ? theme.onPrimary : theme.textMuted, fontWeight: '800' }}>
-                   {editTarget ? 'Simpan Perubahan' : form ? FORM_COPY[form].buttonText : 'Simpan'}
-                </Text>
+                {saving ? (
+                  <View style={styles.savingContent}>
+                    <ActivityIndicator color={theme.onPrimary} size="small" />
+                    <Text style={{ color: theme.onPrimary, fontWeight: '800' }}>Menyimpan…</Text>
+                  </View>
+                ) : (
+                  <Text style={{ color: (form === 'debt' ? (debtName.trim() && debtAmount.trim()) : form === 'savings' ? (savingsName.trim() && savingsTargetAmount.trim()) : form === 'account' ? accountName.trim() : value.trim()) ? theme.onPrimary : theme.textMuted, fontWeight: '800' }}>
+                    {editTarget ? 'Simpan Perubahan' : form ? FORM_COPY[form].buttonText : 'Simpan'}
+                  </Text>
+                )}
               </TouchableOpacity>
             </KeyboardAwareScrollView>
           </Pressable>
@@ -832,6 +975,7 @@ function SectionHeader({
   hideIcon = false,
   icon: Icon,
   onAdd,
+  showDetail = false,
   subtitle,
   theme,
   title,
@@ -840,7 +984,8 @@ function SectionHeader({
   compact?: boolean;
   hideIcon?: boolean;
   icon: React.ComponentType<any>;
-  onAdd: () => void;
+  onAdd?: () => void;
+  showDetail?: boolean;
   subtitle: string;
   theme: ReturnType<typeof getTheme>;
   title: string;
@@ -862,13 +1007,19 @@ function SectionHeader({
         </Text>
       </View>
       <View style={styles.headerButtons}>
-        <TouchableOpacity
-          onPress={onAdd}
-          style={[styles.inlineAdd, compact && styles.compactInlineAdd, { backgroundColor: theme.surfaceElement }]}
-          accessibilityLabel={`Tambah ${title}`}
-        >
-          <Add color={theme.deepTeal} size={compact ? 14 : 16} variant="Bold" />
-        </TouchableOpacity>
+        {onAdd ? (
+          <TouchableOpacity
+            onPress={onAdd}
+            style={[styles.inlineAdd, compact && styles.compactInlineAdd, { backgroundColor: theme.surfaceElement }]}
+            accessibilityLabel={`Tambah ${title}`}
+          >
+            <Add color={theme.deepTeal} size={compact ? 14 : 16} variant="Bold" />
+          </TouchableOpacity>
+        ) : showDetail ? (
+          <View style={[styles.inlineAdd, compact && styles.compactInlineAdd, { backgroundColor: theme.surfaceElement }]}>
+            <ArrowRight2 color={theme.deepTeal} size={compact ? 14 : 16} variant="Bold" />
+          </View>
+        ) : null}
         {trailing}
       </View>
     </View>
@@ -880,12 +1031,14 @@ function SavingsDeck({
   items,
   onEmptyPress,
   onIndexChange,
+  onDetail,
   theme,
 }: {
   activeIndex: number;
   items: SavingsItem[];
   onEmptyPress: () => void;
   onIndexChange: (index: number) => void;
+  onDetail?: (id: string) => void;
   theme: ReturnType<typeof getTheme>;
 }) {
   const handleNext = () => {
@@ -896,7 +1049,7 @@ function SavingsDeck({
     <View style={styles.deckWrap}>
       <TouchableOpacity
         activeOpacity={0.92}
-        onPress={items.length > 1 ? handleNext : (items[0]?.id === 'empty' ? onEmptyPress : undefined)}
+        onPress={items[activeIndex]?.id === 'empty' ? onEmptyPress : onDetail ? () => onDetail(items[activeIndex].id) : items.length > 1 ? handleNext : undefined}
         style={styles.stackedCarouselContainer}
       >
         {items.map((item, index) => {
@@ -1026,6 +1179,7 @@ function InlineRow({
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 110, gap: 12 },
+  hidden: { display: 'none' },
   header: { gap: 6, marginBottom: 8 },
   title: { fontSize: 24, fontWeight: '800', letterSpacing: -0.8 },
   subtitle: { fontSize: 14, lineHeight: 20 },
@@ -1046,11 +1200,77 @@ const styles = StyleSheet.create({
   inlineAdd: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   compactInlineAdd: { width: 28, height: 28, borderRadius: 14 },
   compactIconBox: { width: 34, height: 34, borderRadius: 12 },
+  accountSettings: { gap: 16 },
+  accountSummary: { padding: 20 },
+  accountSummaryLabel: { fontSize: 12, opacity: 0.8 },
+  accountSummaryValue: { fontSize: 28, marginTop: 8 },
+  accountSummaryMeta: { fontSize: 12, opacity: 0.7, marginTop: 5 },
+  accountListHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  accountListTitle: { fontSize: 18 },
+  accountAddButton: { height: 38, borderRadius: 19, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  accountAddText: { fontSize: 12 },
+  accountList: { gap: 10 },
+  accountItem: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderWidth: 1 },
+  accountItemIcon: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  accountItemCopy: { flex: 1, minWidth: 0 },
+  accountItemNameRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  accountItemName: { flexShrink: 1, fontSize: 14 },
+  accountMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  accountKindDot: { width: 7, height: 7, borderRadius: 4 },
+  accountItemMeta: { fontSize: 11 },
+  defaultBadge: { borderRadius: 99, paddingHorizontal: 7, paddingVertical: 3 },
+  defaultBadgeText: { fontSize: 8, letterSpacing: 0.4 },
+  accountItemBalance: { alignItems: 'flex-end', gap: 8 },
+  accountBalanceValue: { fontSize: 13 },
+  accountItemActions: { flexDirection: 'row', gap: 7 },
+  accountActionButton: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   accountRowBlock: { gap: 6 },
   accountDueChip: { alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
   accountDueChipText: { fontSize: 11, fontWeight: '800' },
   duoRow: { flexDirection: 'row', gap: 12 },
   duoCard: { flex: 1, aspectRatio: 1, borderWidth: 1, borderRadius: 26, padding: 14, justifyContent: 'space-between' },
+  savingsSettings: { flex: 1, borderWidth: 1, borderRadius: 26, padding: 16, gap: 16 },
+  debtSettings: { flex: 1, gap: 16 },
+  debtSummary: { padding: 20, gap: 7 },
+  debtSummaryTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  debtSummaryIcon: { width: 42, height: 42, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  debtSummaryBadge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  debtSummaryBadgeText: { fontSize: 9, letterSpacing: 0.6 },
+  debtSummaryLabel: { fontSize: 12, opacity: 0.78 },
+  debtSummaryValue: { fontSize: 30, letterSpacing: -1 },
+  debtSummaryFooter: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginTop: 6 },
+  debtSummaryMeta: { flexShrink: 1, fontSize: 11, opacity: 0.76 },
+  debtListHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  debtListHeading: { flex: 1, gap: 3 },
+  debtListTitle: { fontSize: 18 },
+  debtListSubtitle: { fontSize: 12 },
+  debtList: { gap: 10 },
+  debtItem: { borderWidth: 1, padding: 16, gap: 13 },
+  debtItemTop: { flexDirection: 'row', alignItems: 'center', gap: 11 },
+  debtItemIcon: { width: 42, height: 42, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  debtItemCopy: { flex: 1, minWidth: 0, alignItems: 'flex-start', gap: 5 },
+  debtItemName: { fontSize: 15 },
+  debtStatusChip: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 },
+  debtStatusText: { fontSize: 9, letterSpacing: 0.2 },
+  debtAmountRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 },
+  debtAmountLabel: { fontSize: 10, marginBottom: 4 },
+  debtItemAmount: { fontSize: 20, letterSpacing: -0.5 },
+  debtPaidCopy: { alignItems: 'flex-end' },
+  debtPaidAmount: { fontSize: 13 },
+  debtItemFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  debtFooterCopy: { flex: 1, minWidth: 0, gap: 3 },
+  debtFooterStrong: { fontSize: 12 },
+  debtFooterMuted: { fontSize: 11 },
+  emptyDebt: { padding: 20, alignItems: 'center', gap: 8 },
+  emptyDebtIcon: { width: 48, height: 48, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
+  emptyDebtCopy: { fontSize: 12, lineHeight: 18, textAlign: 'center', marginBottom: 6 },
+  goalList: { gap: 10 },
+  goalItem: { borderWidth: 1, padding: 16, gap: 12 },
+  goalHeading: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  goalCopy: { flex: 1, minWidth: 0, gap: 4 },
+  goalAmounts: { flexDirection: 'row', alignItems: 'baseline', gap: 5 },
+  goalFooter: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
+  emptyGoal: { padding: 18, gap: 6 },
   debtContentWrap: { flex: 1, justifyContent: 'center' },
   stackedCarouselContainer: {
     flex: 1,
@@ -1070,7 +1290,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between'
   },
   deckWrap: { flex: 1, justifyContent: 'space-between' },
-  savingsMetaWrap: { gap: 2, marginTop: 4 },
+  savingsMetaWrap: { gap: 4, marginTop: 4 },
+  savingsPlanRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
   savingsMetaText: { fontSize: 10, fontWeight: '700' },
   deckTitle: { fontSize: 14, fontWeight: '800' },
   deckValue: { fontSize: 11, fontWeight: '700' },
@@ -1098,33 +1319,19 @@ const styles = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
   chipText: { fontSize: 12, fontWeight: '700' },
-  categoryScrollContent: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingVertical: 4,
-  },
-  categoryRowContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  categoryScrollView: {
-    flex: 1,
-  },
-  categoryHeaderClickable: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  categoryBody: { paddingTop: 6, overflow: 'hidden' },
-  addChipBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    gap: 4,
-  },
-  addChipText: { fontSize: 12, fontWeight: '700' },
+  categorySettings: { gap: 16 },
+  categorySummary: { padding: 20, gap: 8 },
+  categorySummaryTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 },
+  categorySummaryCount: { fontSize: 10, letterSpacing: 0.5 },
+  categorySummaryStats: { flexDirection: 'row', gap: 32, marginTop: 4 },
+  categorySummaryValue: { fontSize: 24 },
+  categorySummaryMeta: { fontSize: 11, opacity: 0.75 },
+  categoryItem: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderWidth: 1 },
+  categoryTypeBadge: { alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginTop: 5 },
+  categoryTypeText: { fontSize: 9, letterSpacing: 0.3 },
+  emptyCategory: { padding: 20, alignItems: 'center', gap: 8 },
+  categoryTypeOptions: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  categoryTypeOption: { flex: 1, minHeight: 44, borderWidth: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   confirmBackdrop: { flex: 1, justifyContent: 'center', paddingHorizontal: 24, backgroundColor: 'rgba(7, 32, 31, 0.46)' },
   confirmCard: { alignItems: 'center', padding: 22 },
   deleteIcon: { width: 52, height: 52, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
@@ -1167,6 +1374,10 @@ const styles = StyleSheet.create({
   },
   flexInput: { flex: 1, height: '100%', fontSize: 15, fontWeight: '500' },
   inputHelperText: { fontSize: 12, marginTop: 2, paddingLeft: 4 },
+  accountKindGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  accountKindButton: { width: '48%', minHeight: 42, borderWidth: 1, borderRadius: 14, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
+  accountKindText: { fontSize: 12, textAlign: 'center' },
+  defaultToggle: { minHeight: 48, borderWidth: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
   tenorTwoColRow: { flexDirection: 'row', gap: 10 },
   tenorColCard: { flex: 1, borderWidth: 1, borderRadius: 16, padding: 12, gap: 4 },
   tenorColLabel: { fontSize: 12 },
@@ -1182,4 +1393,5 @@ const styles = StyleSheet.create({
   dateButtonContent: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   dateButtonLabel: { fontSize: 15, fontWeight: '600' },
   save: { height: 50, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
+  savingContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 });

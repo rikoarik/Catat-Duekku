@@ -28,33 +28,34 @@ export function DashboardHeader({
 
   return (
     <View style={styles.container}>
-      {/* Top Bar: Left Profile Avatar + Greeting Text Inline, Right Notification */}
       <View style={styles.topBar}>
-        {/* Left Side: Avatar + Text "Halo Budi, Selamat Datang!" */}
         <View style={styles.profileGreetingGroup}>
           <TouchableOpacity
             activeOpacity={0.8}
-            style={[styles.avatarBtn, { backgroundColor: theme.primary }]}
+            accessibilityRole="button"
+            accessibilityLabel="Buka profil"
+            style={[styles.avatarBtn, { backgroundColor: theme.surfaceElement }]}
             onPress={onProfilePress}>
-            <Text style={styles.avatarText}>{getInitial(userName)}</Text>
+            <Text style={[styles.avatarText, { color: theme.textPrimary }]}>{getInitial(userName)}</Text>
           </TouchableOpacity>
 
           <View style={styles.greetingTextWrapper}>
-            <Text style={[styles.subGreeting, { color: theme.textMuted }]}>
-              {t('dashboard.greetingHello')} {userName.split(' ')[0]} 👋
-            </Text>
             <Text style={[styles.mainTitle, { color: theme.textPrimary }]}>
+              {t('dashboard.greetingHello')} {userName.split(' ')[0]}
+            </Text>
+            <Text style={[styles.subGreeting, { color: theme.textMuted }]}>
               {t('dashboard.greetingWelcome')}
             </Text>
           </View>
         </View>
 
-        {/* Right Side: Notification Bell */}
         <TouchableOpacity
           activeOpacity={0.75}
+          accessibilityRole="button"
+          accessibilityLabel="Buka notifikasi"
           style={[
             styles.circleBtn,
-            { backgroundColor: colorScheme === 'dark' ? theme.surfaceMuted : theme.surfaceButton },
+            { backgroundColor: theme.surfaceButton },
           ]}
           onPress={onNotificationPress}>
           <Notification color={theme.textPrimary} size={20} variant="Outline" />
@@ -90,8 +91,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   avatarText: {
-    color: getTheme('light').onSurfaceStrong,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
   },
   greetingTextWrapper: {
@@ -104,7 +104,7 @@ const styles = StyleSheet.create({
   },
   mainTitle: {
     fontSize: 18,
-    fontWeight: '900',
+    fontWeight: '800',
     letterSpacing: -0.4,
   },
   circleBtn: {

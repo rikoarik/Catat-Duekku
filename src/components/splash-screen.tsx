@@ -55,15 +55,16 @@ export function AnimatedSplashScreen({ onFinish }: SplashScreenProps) {
 
     // Step 3: Finish Callback Transition
     if (onFinish) {
+      let finishTimer: ReturnType<typeof setTimeout> | undefined;
       const timer = setTimeout(() => {
         bgOpacity.value = withTiming(0, { duration: 400 });
-        const finishTimer = setTimeout(() => {
-          onFinish();
-        }, 400);
-        return () => clearTimeout(finishTimer);
+        finishTimer = setTimeout(onFinish, 400);
       }, 1600);
 
-      return () => clearTimeout(timer);
+      return () => {
+        clearTimeout(timer);
+        if (finishTimer) clearTimeout(finishTimer);
+      };
     }
   }, []);
 

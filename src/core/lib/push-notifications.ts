@@ -1,8 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
-import { router, type Href } from 'expo-router';
+import { router, type Href, useRootNavigationState } from 'expo-router';
 
 import { edgeApi } from '@/core/lib/edge-api';
 import { supabase } from '@/core/lib/supabase';
@@ -70,12 +70,23 @@ export async function unregisterCurrentPushToken() {
   }
 }
 
-function openNotification(notification: { request: { content: { data?: Record<string, unknown> } } }) {
+function notificationUrl(notification: { request: { content: { data?: Record<string, unknown> } } }) {
   const url = notification.request.content.data?.url;
-  if (typeof url === 'string' && url.startsWith('/')) router.push(url as Href);
+  return typeof url === 'string' && url.startsWith('/') ? url as Href : null;
 }
 
 export function usePushNotifications() {
+  const navigationState = useRootNavigationState();
+  const navigationReady = useRef(false);
+  const pendingUrl = useRef<Href | null>(null);
+
+  useEffect(() => {
+    navigationReady.current = !!navigationState?.key;
+    if (!navigationReady.current || !pendingUrl.current) return;
+    router.push(pendingUrl.current);
+    pendingUrl.current = null;
+  }, [navigationState?.key]);
+
   useEffect(() => {
     if (!supportsRemotePush()) return;
     let active = true;
@@ -90,9 +101,15 @@ export function usePushNotifications() {
         if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session) register();
         if (event === 'SIGNED_OUT') currentToken = null;
       });
+      const open = (notification: Parameters<typeof notificationUrl>[0]) => {
+        const url = notificationUrl(notification);
+        if (!url) return;
+        if (navigationReady.current) router.push(url);
+        else pendingUrl.current = url;
+      };
       const response = Notifications.getLastNotificationResponse();
-      if (response?.notification) openNotification(response.notification);
-      const responseSubscription = Notifications.addNotificationResponseReceivedListener((value) => openNotification(value.notification));
+      if (response?.notification) open(response.notification);
+      const responseSubscription = Notifications.addNotificationResponseReceivedListener((value) => open(value.notification));
       const tokenSubscription = Notifications.addPushTokenListener(() => register());
       cleanup = () => {
         auth.data.subscription.unsubscribe();
